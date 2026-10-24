@@ -16,16 +16,18 @@ It searches real job listings, turns everyday experience (class projects, volunt
 | Area | What you can do |
 | --- | --- |
 | **Job Search** | Search real listings by title/keywords and location. Filter by job type (full-time, part-time, internship, contract), remote, date posted, experience and country. See employer, location, type, salary (when listed), posting date and a link to the original posting. Load more results, save jobs, add them to your tracker. |
-| **Job Tracker** | Add, edit and delete applications. Statuses: Interested, Applying, Applied, Interview, Offer, Rejected. Dates, notes, interview times, status history. Duplicate entries are blocked. List and Board views. |
+| **Job Tracker** | The center of the app. Add, edit and delete applications. Statuses: Interested, Applying, Applied, Interview, Offer, Rejected. Dates, notes, interview times, status history. Duplicate entries are blocked. List and Board views. Every row shows its next step. |
+| **Application workspace** | Open any tracked job to work through it step by step: add the description → **analyze the requirements** (AI, or keywords in Basic mode) → tailor your resume → write a cover letter → apply → practice the interview. Each step links to the right tool with the job already filled in, and progress is worked out from what you actually did. |
 | **Resume Builder** | Guided sections, "Improve wording", **Draft summary from my resume**, completeness score, live preview, **PDF download**, and **Tailor to a job**. |
 | **Cover Letters** | Pick a saved/tracked job or paste a posting. Drafts use only your resume and your own notes; requirements you don't show are listed as gaps instead of being claimed. Edit, save, copy, download PDF. |
 | **Interview Practice** | Questions from a built-in library, from skills named in a job description, or (with AI) generated for the job. Written answers, feedback (AI or automated checklist), history. |
 | **Career Assistant** | Preferences (role, location, interests, job types). Recommended jobs ranked against your resume, with **"Why it may fit"** (checkable facts) kept separate from **"Check before applying"**. Transferable skills with the exact resume line as evidence, and practical ways to strengthen your qualifications. |
 | **Experience Translator** | Describe what you did in plain words → editable resume bullets. |
 | **Career Missions** | Three small tasks per day, streaks and history. |
-| **Dashboard** | Progress, pipeline by status, saved jobs, upcoming interviews, missions, recent activity — all from your real data. |
+| **Dashboard** | **Your next steps** for open applications, progress, pipeline by status, saved jobs, upcoming interviews, missions, recent activity — all from your real data. |
 | **Accounts** | Sign up, sign in, sign out, password reset, change password, delete account. Copy guest data into a new account. |
-| **Settings** | Profile, account, AI connection, backup/restore, delete all data. |
+| **Settings** | Profile, account, plan and AI usage this month, AI connection, backup/restore, delete all data. |
+| **Plans** | Every account is on **Free** (30 AI requests a month, configurable). The server is ready for a future **Premium** plan; there are no payments or upgrade buttons yet. See [docs/LAUNCH.md](docs/LAUNCH.md). |
 
 ### Honesty rules built into the app
 
@@ -90,6 +92,8 @@ Every API is **optional**: the app starts without any keys and each feature expl
 | `JSEARCH_COUNTRY` | Optional | Default search country (`us`, `ca`, `gb`, …). |
 | `ANTHROPIC_API_KEY` | AI features | From <https://console.anthropic.com> (starts with `sk-ant-`). |
 | `AI_MODEL` | Optional | Defaults to `claude-sonnet-5-5`. Set `claude-opus-5-5` for the most capable model (higher cost per request). |
+| `AI_FREE_MONTHLY_LIMIT` | Optional | AI requests per signed-in user per month on the Free plan (default 30). Failed requests don't count. |
+| `AI_PREMIUM_MONTHLY_LIMIT` | Optional | Same for the Premium plan (default 300). Nobody is on Premium until billing exists. |
 | `DATABASE_PATH` | Accounts | SQLite file. Default `data/first-job-ai.db`. Use a persistent disk in production. |
 | `APP_URL` | Password reset (production) | Public URL of the site, e.g. `https://firstjob.example.com`. |
 | `RESEND_API_KEY`, `EMAIL_FROM` | Password reset emails | From <https://resend.com>, with a verified sender domain. |
@@ -202,6 +206,7 @@ Example: **Render**
 - API keys live only on the server and are never sent to the browser.
 - Passwords are hashed with scrypt and a random salt; sessions are random tokens stored hashed in the database, sent as `HttpOnly`, `SameSite=Lax` (and `Secure` in production) cookies.
 - Every data request uses the user id from the session, so users can only read and write their own data.
+- Each signed-in user has a monthly AI allowance (`AI_FREE_MONTHLY_LIMIT`), so one account can't run up your Anthropic bill.
 - State-changing API requests must be JSON from the same origin (CSRF protection). Sign-in, sign-up, reset, AI and job search are rate limited.
 - The production server sends a Content-Security-Policy and other security headers, and blocks path traversal.
 - Guest data stays in the browser's localStorage. When signed in, data is not copied into localStorage.
@@ -221,6 +226,7 @@ first-job-ai/
 │   ├── jobsHandler.js   JSearch job search (OpenWeb Ninja or RapidAPI)
 │   ├── config.js        Checks settings at startup and explains problems
 │   ├── aiHandler.js     Anthropic AI tasks
+│   ├── plans.js         Free/Premium plans and the monthly AI allowance
 │   └── http.js          Shared HTTP helpers and rate limiter
 ├── src/
 │   ├── pages/           One file per page (JobSearch, CoverLetters, CareerAssistant, Auth, …)
@@ -236,6 +242,8 @@ first-job-ai/
 ---
 
 ## Known limitations
+
+The full launch-readiness list (what's complete, what still needs work, remaining security issues, the monetization plan) is in [docs/LAUNCH.md](docs/LAUNCH.md).
 
 - Job listings depend on JSearch; availability, salaries and dates are only as accurate as the source. The app can't confirm a job is still open.
 - Rate limits and the search cache are in memory: run a single server instance (or move them to a shared store such as Redis).

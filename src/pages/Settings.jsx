@@ -1,8 +1,9 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import Icon from '../components/Icon.jsx';
 import { ConfirmDialog, Modal } from '../components/Modal.jsx';
-import { Field, PageHeader, Spinner } from '../components/ui.jsx';
+import { Field, PageHeader, ProgressBar, Spinner } from '../components/ui.jsx';
+import { apiFetch } from '../lib/api.js';
 import { useAppData } from '../context/AppDataContext.jsx';
 import { useToast } from '../context/ToastContext.jsx';
 import { useAuth } from '../context/AuthContext.jsx';
@@ -188,6 +189,38 @@ function AiSettings() {
   );
 }
 
+// Plan and AI allowance from the server. There is no upgrade button on
+// purpose: payments are not set up yet.
+function PlanUsage() {
+  const [usage, setUsage] = useState(null);
+  const [failed, setFailed] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    apiFetch('/api/usage')
+      .then((res) => !cancelled && setUsage(res.ai))
+      .catch(() => !cancelled && setFailed(true));
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  return (
+    <div className="data-row">
+      <div>
+        <strong>Plan: {usage ? usage.planLabel : '…'}</strong>
+        <p className="subtle">
+          {failed
+            ? 'Your AI usage couldn’t be loaded right now.'
+            : usage
+              ? `${usage.used} of ${usage.limit} AI requests used this month. Resets on ${formatDate(usage.resetsOn)}. Basic-mode tools are always unlimited.`
+              : 'Loading your AI usage…'}
+        </p>
+      </div>
+      {usage && <ProgressBar value={usage.limit ? Math.min(100, (usage.used / usage.limit) * 100) : 100} label="AI requests used this month" tone={usage.used >= usage.limit ? 'warn' : 'accent'} />}
+    </div>
+  );
+}
+
 function AccountSettings() {
   const auth = useAuth();
   const { actions } = useAppData();
@@ -292,6 +325,7 @@ function AccountSettings() {
         </button>
       </div>
       <div className="panel-body data-actions">
+        <PlanUsage />
         <form className="data-row account-password" onSubmit={changePassword} noValidate>
           <div>
             <strong>Change password</strong>

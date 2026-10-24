@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import Icon from '../components/Icon.jsx';
 import JobPicker from '../components/jobs/JobPicker.jsx';
 import { ConfirmDialog } from '../components/Modal.jsx';
@@ -238,8 +238,15 @@ function LetterEditor({ initial, onSaved, onDeleted }) {
 
 export default function CoverLetters() {
   const { data } = useAppData();
-  const [editing, setEditing] = useState(null); // null = list, {} = new, letter
+  const [params] = useSearchParams();
   const letters = data.coverLetters;
+  // ?letter=<id> opens a saved letter; ?job=<application id> starts one for that job.
+  const [editing, setEditing] = useState(() => {
+    const letter = letters.find((l) => l.id === params.get('letter'));
+    if (letter) return letter;
+    const app = data.applications.find((a) => a.id === params.get('job'));
+    return app ? { jobTitle: app.title, company: app.company, jobDescription: app.description || '', applicationId: app.id } : null;
+  }); // null = list, {} = new, letter
 
   return (
     <div className="cover-letters-page">

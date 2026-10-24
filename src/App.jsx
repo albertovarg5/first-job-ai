@@ -5,6 +5,7 @@ import Onboarding from './pages/Onboarding.jsx';
 import Dashboard from './pages/Dashboard.jsx';
 import ResumeBuilder from './pages/ResumeBuilder.jsx';
 import JobTracker from './pages/JobTracker.jsx';
+import ApplicationWorkspace from './pages/ApplicationWorkspace.jsx';
 import JobSearch from './pages/JobSearch.jsx';
 import CoverLetters from './pages/CoverLetters.jsx';
 import CareerAssistant from './pages/CareerAssistant.jsx';
@@ -29,6 +30,7 @@ export default function App() {
         <Route path="/resume" element={<ResumeBuilder />} />
         <Route path="/jobs" element={<JobSearch />} />
         <Route path="/tracker" element={<JobTracker />} />
+        <Route path="/tracker/:id" element={<ApplicationWorkspace />} />
         <Route path="/cover-letters" element={<CoverLetters />} />
         <Route path="/interview" element={<InterviewPractice />} />
         <Route path="/assistant" element={<CareerAssistant />} />

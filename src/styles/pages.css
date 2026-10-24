@@ -685,3 +685,52 @@ a.sync-pill:hover { background: var(--surface-2); color: var(--ink-2); }
 .mt-8 { margin-top: 8px; }
 .account-password { align-items: flex-start; }
 .account-password-fields { width: min(340px, 100%); }
+
+/* ==========================================================================
+   Application workspace (one tracked job, step by step)
+   ========================================================================== */
+.workspace { display: flex; flex-direction: column; gap: 16px; }
+.ws-back { display: inline-flex; align-items: center; gap: 4px; font-size: 14px; color: var(--ink-2); align-self: flex-start; }
+.ws-head { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.ws-mark { width: 48px; height: 48px; font-size: 20px; border-radius: 12px; }
+.ws-title { flex: 1; min-width: 220px; }
+.ws-title h1 { font-size: 26px; line-height: 1.2; }
+.ws-title p { margin-top: 2px; }
+.ws-head-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.ws-head-actions .status-select { width: auto; min-width: 140px; }
+.ws-next { display: flex; flex-direction: column; gap: 14px; border-color: var(--accent-line); }
+.ws-progress { display: flex; align-items: center; gap: 12px; }
+.ws-progress .progress { flex: 1; }
+.ws-progress .subtle { white-space: nowrap; }
+.ws-next-body { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+.ws-next-body h2 { font-size: 19px; margin: 6px 0 2px; }
+.ws-grid { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 16px; align-items: start; }
+.ws-main, .ws-side { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+.ws-side h2, .ws-main h2 { font-size: 17px; }
+.ws-side h2 { margin-bottom: 12px; }
+.ws-steps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.ws-steps li { display: flex; align-items: center; gap: 10px; font-size: 14px; }
+.ws-steps .step-num { width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center; background: var(--surface-2); color: var(--ink-3); font-size: 12px; flex-shrink: 0; }
+.ws-steps .done .step-num { background: var(--accent-soft); color: var(--accent); }
+.ws-steps .done .link-btn { color: var(--ink-3); font-weight: 500; }
+.ws-steps .current .step-num { background: var(--accent); color: #fff; }
+.ws-links, .ws-history { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; font-size: 14px; }
+.ws-links li { display: flex; align-items: center; gap: 8px; }
+.ws-links .icon { color: var(--ink-3); flex-shrink: 0; }
+.ws-history li { display: flex; align-items: center; gap: 8px; }
+.ws-history .dot { background: currentColor; }
+.ws-history .subtle { margin-left: auto; }
+.ws-analysis { display: flex; flex-direction: column; gap: 16px; }
+.ws-req h4 { font-size: 14px; margin-bottom: 8px; }
+.ws-evidence { display: block; margin-top: 2px; }
+.ws-description { white-space: pre-wrap; font-size: 14px; color: var(--ink-2); max-height: 360px; overflow-y: auto; }
+.app-next { display: block; font-size: 12.5px; color: var(--accent); margin-top: 2px; }
+@media (max-width: 960px) {
+  .ws-grid { grid-template-columns: 1fr; }
+}
+@media (max-width: 640px) {
+  .ws-title h1 { font-size: 22px; }
+  .ws-head-actions { width: 100%; }
+  .ws-head-actions > * { flex: 1 1 auto; }
+  .ws-next-body .btn { width: 100%; justify-content: center; }
+}

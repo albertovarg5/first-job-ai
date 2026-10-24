@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useSearchParams, Link } from 'react-router-dom';
+import { useNavigate, useSearchParams, Link } from 'react-router-dom';
 import Icon from '../components/Icon.jsx';
 import ApplicationForm from '../components/ApplicationForm.jsx';
 import { ConfirmDialog } from '../components/Modal.jsx';
@@ -8,6 +8,7 @@ import { useAppData } from '../context/AppDataContext.jsx';
 import { useToast } from '../context/ToastContext.jsx';
 import { STATUSES, countByStatus, filterApplications, statusLabel } from '../lib/applications.js';
 import { formatDate, formatDateTime, isValidUrl, toDateKey } from '../lib/utils.js';
+import { nextStep } from '../lib/workflow.js';
 
 function StatusSelect({ app, onChange }) {
   return (
@@ -30,6 +31,8 @@ function StatusSelect({ app, onChange }) {
 export default function JobTracker() {
   const { data, actions } = useAppData();
   const toast = useToast();
+  const navigate = useNavigate();
+  const open = (app) => navigate(`/tracker/${encodeURIComponent(app.id)}`);
   const [params, setParams] = useSearchParams();
   const [query, setQuery] = useState('');
   const [status, setStatus] = useState('all');
@@ -102,7 +105,7 @@ export default function JobTracker() {
     <div className="tracker-page">
       <PageHeader
         title="Job Tracker"
-        description="Every job you’re considering, in one place. Update statuses as you hear back."
+        description="Every job you’re considering, in one place. Open one to see your next step for it."
         actions={
           <button className="btn btn-primary" onClick={() => setEditing({})}>
             <Icon name="plus" size={16} /> Add application
@@ -206,9 +209,11 @@ export default function JobTracker() {
                   Actions
                 </span>
               </div>
-              {visible.map((a) => (
+              {visible.map((a) => {
+                const next = nextStep(a, data);
+                return (
                 <div className="app-row" role="row" key={a.id}>
-                  <button className="app-main" role="cell" onClick={() => setEditing(a)}>
+                  <button className="app-main" role="cell" onClick={() => open(a)}>
                     <span className="company-mark" aria-hidden="true">
                       {(a.company || '?').charAt(0).toUpperCase()}
                     </span>
@@ -218,6 +223,7 @@ export default function JobTracker() {
                         {a.company}
                         {a.location ? `, ${a.location}` : ''}
                       </span>
+                      {next && <span className="app-next">Next: {next.label}</span>}
                     </span>
                   </button>
                   <span role="cell" className="app-status">
@@ -245,7 +251,8 @@ export default function JobTracker() {
                     </button>
                   </span>
                 </div>
-              ))}
+                );
+              })}
             </div>
           ) : (
             <div className="board">
@@ -261,7 +268,7 @@ export default function JobTracker() {
                     <div className="board-cards">
                       {col.map((a) => (
                         <article className="board-card" key={a.id}>
-                          <button className="board-card-main" onClick={() => setEditing(a)}>
+                          <button className="board-card-main" onClick={() => open(a)}>
                             <strong>{a.title}</strong>
                             <span className="subtle">{a.company}</span>
                             {a.interviewDate && (
@@ -286,7 +293,7 @@ export default function JobTracker() {
             </div>
           )}
           <p className="subtle tracker-foot">
-            Tip: open an application and paste its description, then use <Link to="/resume?tab=tailor">Tailor to a job</Link> to compare it with your resume.
+            Tip: open an application to see its next step: analyze the job, <Link to="/resume?tab=tailor">tailor your resume</Link>, write a cover letter and practice the interview.
           </p>
         </>
       )}

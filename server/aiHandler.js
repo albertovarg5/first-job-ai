@@ -13,6 +13,7 @@
 //   POST /api/ai/questions  -> { questions: [{ question, category }] }
 //   POST /api/ai/skills     -> { skills: [{ name, evidence }], suggestions: [{ title, detail }] }
 //   POST /api/ai/summary    -> { summary }
+//   POST /api/ai/analyze    -> { summary, mustHave[], niceToHave[], responsibilities[], keywords[], questionsToAsk[] }
 
 const HONESTY_RULES = `Rules you must always follow:
 - Use only facts the user provided. Never invent numbers, percentages, results, tools, employers, titles, dates, responsibilities or achievements.
@@ -109,6 +110,29 @@ Return: {"summary": "..."}.`,
 RESUME:
 """${resumeText}"""`,
     validate: (j) => typeof j.summary === 'string' && j.summary.trim().length > 20,
+  },
+  analyze: {
+    system: `You help entry-level candidates understand what a job posting really asks for before they apply.
+${HONESTY_RULES}
+Only list requirements, duties and keywords that are written in the job description. Do not add requirements that are typical for the role but not stated.
+Split requirements into "mustHave" (stated as required) and "niceToHave" (stated as preferred, a plus, or bonus). If the posting does not say, put the requirement in "mustHave".
+If a resume is provided, set "evidence" for each requirement to a short exact quote copied from the resume (5-20 words) that shows it, or "" if the resume does not show it. If no resume is provided, every "evidence" is "".
+"questionsToAsk" are 2-3 thoughtful questions the candidate could ask the interviewer about things the posting leaves unclear.
+Return: {"summary": "one or two sentences describing the role", "mustHave": [{"requirement": "...", "evidence": "..."}], "niceToHave": [{"requirement": "...", "evidence": "..."}], "responsibilities": ["..."], "keywords": ["..."], "questionsToAsk": ["..."]} with at most 10 items in each list.`,
+    // Never "analyze" a job the AI hasn't been given.
+    requires: { jobDescription: 'Add the job description first. First Job AI can only analyze a posting it has seen.' },
+    user: ({ jobTitle, company, jobDescription, resumeText }) => `Job title: ${jobTitle || 'not specified'}
+Company: ${company || 'not specified'}
+
+JOB DESCRIPTION:
+"""${jobDescription}"""
+
+CANDIDATE RESUME:
+"""${resumeText || 'No resume provided.'}"""`,
+    validate: (j) => {
+      const reqs = (list) => Array.isArray(list) && list.every((r) => r && typeof r.requirement === 'string');
+      return typeof j.summary === 'string' && reqs(j.mustHave) && reqs(j.niceToHave) && Array.isArray(j.responsibilities) && Array.isArray(j.keywords);
+    },
   },
 };
 
@@ -283,6 +307,9 @@ export function createAiHandler(env = {}) {
       }
       try {
         const payload = await readJson(req);
+        for (const [field, message] of Object.entries(TASKS[task].requires || {})) {
+          if (String(payload?.[field] ?? '').trim().length < 40) throw new AiError(400, message, 'invalid_input');
+        }
         const result = await callModel(task, payload);
         return send(res, 200, result);
       } catch (err) {

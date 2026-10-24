@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import Icon from '../components/Icon.jsx';
 import FeedbackView from '../components/FeedbackView.jsx';
 import JobPicker from '../components/jobs/JobPicker.jsx';
@@ -24,10 +25,12 @@ const QUESTION_SOURCE = {
   library: 'Sample question from the built-in library',
 };
 
-function Setup({ onStart, defaultTitle, busy }) {
+function Setup({ onStart, defaultTitle, defaultJob, busy }) {
   const { aiActive } = useAppData();
-  const [jobTitle, setJobTitle] = useState(defaultTitle || '');
-  const [jobDescription, setJobDescription] = useState('');
+  const [jobTitle, setJobTitle] = useState(defaultJob?.title || defaultTitle || '');
+  const [jobDescription, setJobDescription] = useState(defaultJob?.description || '');
+  // The tracked application this practice is for, so its workflow step can be marked done.
+  const [applicationId, setApplicationId] = useState(defaultJob?.id || null);
   const [type, setType] = useState('mixed');
   const [count, setCount] = useState(5);
   const [useAi, setUseAi] = useState(true);
@@ -39,7 +42,7 @@ function Setup({ onStart, defaultTitle, busy }) {
       setError('Enter the job title you’re preparing for.');
       return;
     }
-    onStart({ jobTitle: jobTitle.trim(), type, count, jobDescription: jobDescription.trim(), useAi: aiActive && useAi });
+    onStart({ jobTitle: jobTitle.trim(), type, count, jobDescription: jobDescription.trim(), useAi: aiActive && useAi, applicationId });
   };
 
   return (
@@ -64,6 +67,7 @@ function Setup({ onStart, defaultTitle, busy }) {
           onPick={(job) => {
             setJobTitle(job.title);
             setJobDescription(job.description);
+            setApplicationId(job.applicationId || null);
             setError('');
           }}
         />
@@ -283,7 +287,10 @@ function SessionReview({ session, onDelete, onResume }) {
 export default function InterviewPractice() {
   const { data, actions, aiActive, aiStatus } = useAppData();
   const toast = useToast();
-  const [tab, setTab] = useState('practice');
+  const [params] = useSearchParams();
+  const [tab, setTab] = useState(params.get('tab') === 'history' ? 'history' : 'practice');
+  // ?job=<application id> prepares a session for that tracked job.
+  const linkedJob = data.applications.find((a) => a.id === params.get('job'));
   const [activeId, setActiveId] = useState(null);
   const [summaryId, setSummaryId] = useState(null);
   const [deleting, setDeleting] = useState(null);
@@ -293,7 +300,7 @@ export default function InterviewPractice() {
   const active = sessions.find((s) => s.id === activeId);
   const summary = sessions.find((s) => s.id === summaryId);
 
-  const start = async ({ jobTitle, type, count, jobDescription, useAi }) => {
+  const start = async ({ jobTitle, type, count, jobDescription, useAi, applicationId }) => {
     let questions = null;
     if (useAi) {
       setPreparing(true);
@@ -310,6 +317,7 @@ export default function InterviewPractice() {
     const session = {
       id: createId('iv'),
       jobTitle,
+      applicationId: applicationId || null,
       type,
       startedAt: new Date().toISOString(),
       completedAt: null,
@@ -393,7 +401,7 @@ export default function InterviewPractice() {
               aiStatus={aiStatus}
               basicText="Questions come from a built-in library, plus questions about skills named in a job description you paste. Feedback is an automated checklist (length, STAR structure, specifics) — useful, but not personalized like a coach or AI."
             />
-            <Setup onStart={start} defaultTitle={data.profile?.targetRole} busy={preparing} />
+            <Setup onStart={start} defaultTitle={data.profile?.targetRole} defaultJob={linkedJob} busy={preparing} />
           </div>
         )
       ) : sessions.length ? (

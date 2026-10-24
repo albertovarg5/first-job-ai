@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import Icon from '../Icon.jsx';
 import { Field, ModeNotice, ProgressRing, Spinner } from '../ui.jsx';
 import { useAppData } from '../../context/AppDataContext.jsx';
@@ -11,13 +11,17 @@ import { callAi } from '../../lib/ai.js';
 export default function TailorPanel({ resume }) {
   const { data, aiActive, aiStatus, actions } = useAppData();
   const toast = useToast();
-  const [jobText, setJobText] = useState('');
+  const [params] = useSearchParams();
+  const savedPostings = data.applications.filter((a) => (a.description || '').trim().length > 40);
+  // Opened from an application's workspace (?job=<application id>).
+  const linked = savedPostings.find((a) => a.id === params.get('job'));
+  const [appId, setAppId] = useState(linked?.id || '');
+  const [jobText, setJobText] = useState(linked?.description || '');
   const [error, setError] = useState('');
   const [result, setResult] = useState(null);
   const [aiTips, setAiTips] = useState(null);
   const [aiLoading, setAiLoading] = useState(false);
-
-  const savedPostings = data.applications.filter((a) => (a.description || '').trim().length > 40);
+  const selectedApp = savedPostings.find((a) => a.id === appId);
 
   const analyze = () => {
     if (jobText.trim().length < 80) {
@@ -27,7 +31,8 @@ export default function TailorPanel({ resume }) {
     setError('');
     setAiTips(null);
     setResult(analyzeJobMatch(resume, jobText));
-    actions.logActivity('resume', 'Compared your resume with a job description');
+    if (selectedApp) actions.updateApplication(selectedApp.id, { tailoredAt: new Date().toISOString() });
+    actions.logActivity('resume', selectedApp ? `Compared your resume with ${selectedApp.title} at ${selectedApp.company}` : 'Compared your resume with a job description');
   };
 
   const getAiTips = async () => {
@@ -52,10 +57,15 @@ export default function TailorPanel({ resume }) {
             <select
               id="tailor-pick"
               className="select"
-              defaultValue=""
+              value={appId}
               onChange={(e) => {
                 const app = savedPostings.find((a) => a.id === e.target.value);
-                if (app) setJobText(app.description);
+                if (app) {
+                  setAppId(app.id);
+                  setJobText(app.description);
+                  setResult(null);
+                  setAiTips(null);
+                }
               }}
             >
               <option value="" disabled>
@@ -89,6 +99,7 @@ export default function TailorPanel({ resume }) {
               className="btn btn-ghost"
               onClick={() => {
                 setJobText('');
+                setAppId('');
                 setResult(null);
                 setAiTips(null);
               }}
@@ -201,6 +212,12 @@ export default function TailorPanel({ resume }) {
           </div>
           <p className="subtle">
             Ready to edit? <Link to="/resume?section=skills">Update your skills</Link> or <Link to="/resume?section=experience">your experience bullets</Link>.
+            {selectedApp && (
+              <>
+                {' '}
+                Or go back to <Link to={`/tracker/${encodeURIComponent(selectedApp.id)}`}>{selectedApp.title} at {selectedApp.company}</Link>.
+              </>
+            )}
           </p>
         </section>
       )}

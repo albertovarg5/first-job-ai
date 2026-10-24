@@ -38,6 +38,15 @@ const MIGRATIONS = [
      count INTEGER NOT NULL DEFAULT 0,
      PRIMARY KEY (period, service)
    );`,
+  // Plans and monthly AI usage per user (see server/plans.js). No payments
+  // yet: every account is on the free plan until billing is added.
+  `ALTER TABLE users ADD COLUMN plan TEXT NOT NULL DEFAULT 'free';
+   CREATE TABLE ai_usage (
+     user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+     period TEXT NOT NULL,
+     count INTEGER NOT NULL DEFAULT 0,
+     PRIMARY KEY (user_id, period)
+   );`,
 ];
 
 export async function openDatabase(path = 'data/first-job-ai.db') {

@@ -7,6 +7,7 @@ import { useToast } from '../context/ToastContext.jsx';
 import { resumeChecklist, resumeCompleteness } from '../lib/resume.js';
 import { STATUSES, countByStatus, isSubmitted, upcomingInterviews } from '../lib/applications.js';
 import { dailyMissions } from '../lib/missions.js';
+import { applicationsNeedingAction } from '../lib/workflow.js';
 import { focusMessage } from '../lib/profileOptions.js';
 import { firstName, formatDateTime, greetingFor, timeAgo, toDateKey } from '../lib/utils.js';
 
@@ -27,6 +28,7 @@ export default function Dashboard() {
   const statusCounts = countByStatus(applications);
   const maxStatus = Math.max(1, ...Object.values(statusCounts));
   const heardBack = statusCounts.interview + statusCounts.offer;
+  const nextSteps = applicationsNeedingAction(data, 3);
 
   const completeness = resumeCompleteness(resume);
   const nextResumeStep = resumeChecklist(resume).find((i) => !i.done);
@@ -102,6 +104,53 @@ export default function Dashboard() {
 
       <div className="dash-grid">
         <div className="dash-col">
+          <section className="panel">
+            <div className="panel-header">
+              <h2>Your next steps</h2>
+              <Link to="/tracker" className="btn btn-ghost btn-sm">
+                Open tracker
+              </Link>
+            </div>
+            {nextSteps.length ? (
+              <ul className="row-list">
+                {nextSteps.map(({ app, step, progress: p }) => (
+                  <li key={app.id}>
+                    <span className="company-mark" aria-hidden="true">
+                      {(app.company || '?').charAt(0).toUpperCase()}
+                    </span>
+                    <span className="row-main">
+                      <Link to={`/tracker/${encodeURIComponent(app.id)}`}>
+                        <strong>{app.title}</strong>
+                      </Link>
+                      <span className="subtle">
+                        {app.company} · Next: {step.label}
+                      </span>
+                    </span>
+                    <span className="subtle nowrap">
+                      {p.done}/{p.total} steps
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <EmptyState
+                icon="tracker"
+                title={applications.length ? 'You’re up to date' : 'Start with a job you want'}
+                action={
+                  !applications.length && (
+                    <Link to="/jobs" className="btn btn-primary btn-sm">
+                      Find a job
+                    </Link>
+                  )
+                }
+              >
+                {applications.length
+                  ? 'Every open application has its steps done. Keep statuses current as you hear back.'
+                  : 'Find a real job, save it to your tracker, and First Job AI will guide you step by step: analyze it, tailor your resume, write a cover letter and practice the interview.'}
+              </EmptyState>
+            )}
+          </section>
+
           <section className="panel">
             <div className="panel-header">
               <h2>Career progress</h2>
