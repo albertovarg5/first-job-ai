@@ -2,6 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { loadData, saveData, defaultData, normalizeData } from '../lib/storage.js';
 import { createId, toDateKey } from '../lib/utils.js';
 import { fetchAiStatus } from '../lib/ai.js';
+import { withStatusHistory } from '../lib/applications.js';
 import { addSavedJob, findApplicationForJob, jobToApplication, removeSavedJob } from '../lib/jobs.js';
 
 const AppDataContext = createContext(null);
@@ -66,14 +67,20 @@ export function AppDataProvider({ children }) {
       // Applications
       addApplication(app) {
         const now = new Date().toISOString();
-        const record = { ...app, id: createId('app'), createdAt: now, updatedAt: now };
+        const record = { ...app, id: createId('app'), createdAt: now, updatedAt: now, statusHistory: withStatusHistory({}, app.status || 'interested', now) };
         update((d) => ({ ...d, applications: [record, ...d.applications] }));
         return record;
       },
       updateApplication(id, patch) {
         update((d) => ({
           ...d,
-          applications: d.applications.map((a) => (a.id === id ? { ...a, ...patch, updatedAt: new Date().toISOString() } : a)),
+          applications: d.applications.map((a) => {
+            if (a.id !== id) return a;
+            const now = new Date().toISOString();
+            const next = { ...a, ...patch, updatedAt: now };
+            if (patch.status && patch.status !== a.status) next.statusHistory = withStatusHistory(a, patch.status, now);
+            return next;
+          }),
         }));
       },
       deleteApplication(id) {
@@ -93,7 +100,7 @@ export function AppDataProvider({ children }) {
         const existing = findApplicationForJob(dataRef.current.applications, job);
         if (existing) return { record: existing, created: false };
         const now = new Date().toISOString();
-        const record = { ...jobToApplication(job), id: createId('app'), createdAt: now, updatedAt: now };
+        const record = { ...jobToApplication(job), id: createId('app'), createdAt: now, updatedAt: now, statusHistory: withStatusHistory({}, 'interested', now) };
         dataRef.current = { ...dataRef.current, applications: [record, ...dataRef.current.applications] };
         update((d) => (findApplicationForJob(d.applications, job) ? d : { ...d, applications: [record, ...d.applications] }));
         return { record, created: true };

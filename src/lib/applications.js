@@ -60,7 +60,25 @@ export function filterApplications(applications, { query = '', status = 'all', s
   return [...list].sort(sorters[sort] || sorters.updated);
 }
 
-export function validateApplication(app) {
+const same = (a, b) => String(a || '').trim().toLowerCase() === String(b || '').trim().toLowerCase();
+
+// Another tracked application for the same job (company + title + location).
+export function findDuplicateApplication(app, applications = []) {
+  return (
+    applications.find(
+      (other) => other.id !== app.id && same(other.company, app.company) && same(other.title, app.title) && same(other.location, app.location),
+    ) || null
+  );
+}
+
+// Appends a status change to the application's history.
+export function withStatusHistory(app, status, at = new Date().toISOString()) {
+  const history = Array.isArray(app.statusHistory) ? app.statusHistory : [];
+  if (history.length && history[history.length - 1].status === status) return history;
+  return [...history, { status, at }].slice(-50);
+}
+
+export function validateApplication(app, applications = []) {
   const errors = {};
   if (!app.company?.trim()) errors.company = 'Enter the company name.';
   if (!app.title?.trim()) errors.title = 'Enter the job title.';
@@ -73,5 +91,9 @@ export function validateApplication(app) {
     }
   }
   if (app.dateApplied && app.dateApplied > toDateKey()) errors.dateApplied = 'The application date can’t be in the future.';
+  if (!errors.company && !errors.title && findDuplicateApplication(app, applications)) {
+    errors.title = 'This job (same company, title and location) is already in your tracker. Edit that entry instead.';
+  }
+  if ((app.notes || '').length > 5000) errors.notes = 'Notes can be up to 5,000 characters.';
   return errors;
 }

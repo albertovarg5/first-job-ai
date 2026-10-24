@@ -5,7 +5,7 @@ import MissionItem from '../components/MissionItem.jsx';
 import { useAppData } from '../context/AppDataContext.jsx';
 import { useToast } from '../context/ToastContext.jsx';
 import { resumeChecklist, resumeCompleteness } from '../lib/resume.js';
-import { isSubmitted, upcomingInterviews } from '../lib/applications.js';
+import { STATUSES, countByStatus, isSubmitted, upcomingInterviews } from '../lib/applications.js';
 import { dailyMissions } from '../lib/missions.js';
 import { focusMessage } from '../lib/profileOptions.js';
 import { firstName, formatDateTime, greetingFor, timeAgo, toDateKey } from '../lib/utils.js';
@@ -23,7 +23,10 @@ const ACTIVITY_ICONS = {
 export default function Dashboard() {
   const { data, actions } = useAppData();
   const toast = useToast();
-  const { profile, resume, applications, interviewSessions, translations, missions, activity } = data;
+  const { profile, resume, applications, savedJobs, interviewSessions, translations, missions, activity } = data;
+  const statusCounts = countByStatus(applications);
+  const maxStatus = Math.max(1, ...Object.values(statusCounts));
+  const heardBack = statusCounts.interview + statusCounts.offer;
 
   const completeness = resumeCompleteness(resume);
   const nextResumeStep = resumeChecklist(resume).find((i) => !i.done);
@@ -119,6 +122,39 @@ export default function Dashboard() {
             </div>
           </section>
 
+
+          <section className="panel">
+            <div className="panel-header">
+              <h2>Your pipeline</h2>
+              <Link to="/jobs" className="btn btn-ghost btn-sm">
+                Find jobs
+              </Link>
+            </div>
+            {applications.length || savedJobs.length ? (
+              <div className="panel-body pipeline">
+                <ul className="pipeline-bars">
+                  {STATUSES.map((st) => (
+                    <li key={st.value} className={`status-${st.value}`}>
+                      <span className="pipeline-label">{st.label}</span>
+                      <span className="pipeline-track" aria-hidden="true">
+                        <span className="pipeline-fill" style={{ width: `${(statusCounts[st.value] / maxStatus) * 100}%` }} />
+                      </span>
+                      <strong>{statusCounts[st.value]}</strong>
+                    </li>
+                  ))}
+                </ul>
+                <p className="subtle">
+                  {savedJobs.length} saved job{savedJobs.length === 1 ? '' : 's'}
+                  {submitted > 0 && ` · ${heardBack} of ${submitted} submitted application${submitted === 1 ? '' : 's'} reached interview or offer`}
+                </p>
+              </div>
+            ) : (
+              <EmptyState icon="briefcase" title="No jobs yet" action={<Link to="/jobs" className="btn btn-secondary btn-sm">Search jobs</Link>}>
+                Search real listings, save the interesting ones and track where you applied.
+              </EmptyState>
+            )}
+          </section>
+
           <section className="panel">
             <div className="panel-header">
               <h2>Resume</h2>
@@ -210,6 +246,14 @@ export default function Dashboard() {
               <h2>Quick actions</h2>
             </div>
             <div className="quick-actions">
+              <Link to="/jobs" className="quick">
+                <Icon name="briefcase" />
+                <span>Search real jobs</span>
+              </Link>
+              <Link to="/cover-letters" className="quick">
+                <Icon name="letter" />
+                <span>Write a cover letter</span>
+              </Link>
               <Link to="/translator" className="quick">
                 <Icon name="translator" />
                 <span>Translate an experience</span>

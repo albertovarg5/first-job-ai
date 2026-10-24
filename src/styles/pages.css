@@ -621,3 +621,16 @@ label.chip.selected { background: var(--ink); border-color: var(--ink); color: #
   .job-search-submit .btn { width: 100%; }
   .job-filters { grid-template-columns: 1fr; }
 }
+
+/* Application history (tracker dialog) */
+.status-history h3 { font-size: 13.5px; font-weight: 500; margin-bottom: 6px; }
+.status-history ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; font-size: 13.5px; }
+
+/* Dashboard pipeline */
+.pipeline { display: flex; flex-direction: column; gap: 12px; }
+.pipeline-bars { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 7px; }
+.pipeline-bars li { display: grid; grid-template-columns: 84px 1fr 28px; gap: 10px; align-items: center; font-size: 13.5px; }
+.pipeline-bars strong { text-align: right; font-variant-numeric: tabular-nums; color: var(--ink); }
+.pipeline-label { color: var(--ink-2); }
+.pipeline-track { height: 8px; background: var(--surface-2); border-radius: 999px; overflow: hidden; }
+.pipeline-fill { display: block; height: 100%; border-radius: 999px; background: currentColor; min-width: 0; }

@@ -1,12 +1,14 @@
 import { useState } from 'react';
 import { Modal } from './Modal.jsx';
 import { Field } from './ui.jsx';
-import { STATUSES, emptyApplication, validateApplication } from '../lib/applications.js';
-import { toDateKey } from '../lib/utils.js';
+import { useAppData } from '../context/AppDataContext.jsx';
+import { STATUSES, emptyApplication, statusLabel, validateApplication } from '../lib/applications.js';
+import { formatDateTime, toDateKey } from '../lib/utils.js';
 
 const EARLY = new Set(['interested', 'applying', 'applied']);
 
 export default function ApplicationForm({ open, initial, onSave, onClose }) {
+  const { data } = useAppData();
   const [form, setForm] = useState(() => ({ ...emptyApplication(), ...(initial || {}) }));
   const [errors, setErrors] = useState({});
   const isEdit = Boolean(initial?.id);
@@ -19,7 +21,7 @@ export default function ApplicationForm({ open, initial, onSave, onClose }) {
 
   const submit = (e) => {
     e.preventDefault();
-    const errs = validateApplication(form);
+    const errs = validateApplication(form, data.applications);
     setErrors(errs);
     if (Object.keys(errs).length) return;
     const record = { ...form, company: form.company.trim(), title: form.title.trim() };
@@ -78,8 +80,24 @@ export default function ApplicationForm({ open, initial, onSave, onClose }) {
           <textarea id="app-desc" className="textarea" rows={5} value={form.description} onChange={set('description')} />
         </Field>
         <Field label="Notes" id="app-notes" className="span-2" hint="Contacts, follow-up dates, what you learned about the company.">
-          <textarea id="app-notes" className="textarea" rows={3} value={form.notes} onChange={set('notes')} />
+          <textarea id="app-notes" className="textarea" rows={3} maxLength={5000} value={form.notes} onChange={set('notes')} />
         </Field>
+        {isEdit && (initial.statusHistory?.length > 0 || initial.source === 'jsearch') && (
+          <div className="span-2 status-history">
+            <h3>History</h3>
+            <ul>
+              {initial.source === 'jsearch' && <li>Added from Job Search</li>}
+              {(initial.statusHistory || []).map((h) => (
+                <li key={`${h.status}-${h.at}`}>
+                  <span className={`status status-${h.status}`}>
+                    <span>{statusLabel(h.status)}</span>
+                  </span>{' '}
+                  <span className="subtle">{formatDateTime(h.at)}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
       </form>
     </Modal>
   );
