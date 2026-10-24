@@ -13,6 +13,8 @@ import { extname, join, normalize, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createApi } from './api.js';
 import { reportConfig } from './config.js';
+import { httpsRedirect } from './http.js';
+import { backupSettings } from './backup.js';
 
 const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const distDir = join(root, 'dist');
@@ -68,6 +70,12 @@ async function serveStatic(req, res) {
     res.statusCode = 400;
     return res.end('Bad request');
   }
+  // Hidden names (.env, .git, …) are never part of the app: answer 404 instead of the app page.
+  if (urlPath.split('/').some((part) => part.startsWith('.'))) {
+    res.statusCode = 404;
+    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+    return res.end('Not found');
+  }
   const target = normalize(join(distDir, urlPath));
   // Block path traversal outside dist/.
   const inside = target === distDir || target.startsWith(distDir + sep);
@@ -115,13 +123,27 @@ const server = createServer(async (req, res) => {
   }
   try {
     const path = (req.url || '/').split('?')[0];
+    const secureUrl = path === '/healthz' ? null : httpsRedirect(req, process.env);
+    if (secureUrl) {
+      res.statusCode = 308;
+      res.setHeader('Location', secureUrl);
+      return res.end();
+    }
     if (path === '/api' || path.startsWith('/api/')) {
       req.url = req.url.slice(4) || '/';
       return await api(req, res);
     }
     if (path === '/healthz') {
       res.setHeader('Content-Type', 'text/plain');
-      return res.end('ok');
+      res.setHeader('Cache-Control', 'no-store');
+      try {
+        await api.health(); // The host restarts the app if its database can't be read.
+        return res.end('ok');
+      } catch (err) {
+        console.error('[health] Database check failed:', err.message);
+        res.statusCode = 503;
+        return res.end('database unavailable');
+      }
     }
     if (req.method !== 'GET' && req.method !== 'HEAD') {
       res.statusCode = 405;
@@ -147,4 +169,36 @@ try {
 
 server.listen(port, () => {
   console.log(`First Job AI is running at http://localhost:${port}`);
+  console.log(`[First Job AI] Database: ${resolve(process.env.DATABASE_PATH || 'data/first-job-ai.db')}`);
 });
+
+// Daily database backups in production (BACKUP_DISABLED=true turns them off).
+if (process.env.NODE_ENV === 'production' && process.env.BACKUP_DISABLED !== 'true') {
+  const settings = backupSettings(process.env);
+  const runBackup = () =>
+    api
+      .backup(settings)
+      .then((file) => console.log(`[backup] Wrote ${file}`))
+      .catch((err) => console.error('[backup] Failed:', err.message));
+  runBackup();
+  setInterval(runBackup, 24 * 60 * 60 * 1000).unref();
+}
+
+// Unexpected errors go to the log (the host keeps it) instead of vanishing.
+process.on('unhandledRejection', (err) => console.error('[error] Unhandled promise rejection:', err));
+process.on('uncaughtException', (err) => {
+  console.error('[error] Uncaught exception, restarting:', err);
+  process.exit(1);
+});
+
+// Hosts send SIGTERM before a redeploy: finish open requests, then close the database.
+for (const signal of ['SIGTERM', 'SIGINT']) {
+  process.on(signal, () => {
+    console.log(`[First Job AI] ${signal} received, shutting down.`);
+    server.close(async () => {
+      await api.close().catch(() => {});
+      process.exit(0);
+    });
+    setTimeout(() => process.exit(0), 10000).unref();
+  });
+}

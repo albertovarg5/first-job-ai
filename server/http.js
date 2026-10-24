@@ -42,6 +42,31 @@ export function readJson(req, limit = 100000) {
   });
 }
 
+// Reads the body exactly as sent, as a Buffer. Needed where a signature is
+// computed over the original bytes (Stripe webhooks).
+export function readRaw(req, limit = 1024 * 1024) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    let size = 0;
+    let tooLarge = false;
+    req.on('data', (chunk) => {
+      if (tooLarge) return;
+      const buf = typeof chunk === 'string' ? Buffer.from(chunk) : chunk;
+      size += buf.length;
+      if (size > limit) {
+        tooLarge = true;
+        reject(new HttpError(413, 'This request is too large.', 'too_large'));
+        return;
+      }
+      chunks.push(buf);
+    });
+    req.on('end', () => {
+      if (!tooLarge) resolve(Buffer.concat(chunks));
+    });
+    req.on('error', reject);
+  });
+}
+
 export function parseCookies(req) {
   const out = {};
   for (const part of String(req.headers?.cookie || '').split(';')) {
@@ -75,7 +100,20 @@ export function queryOf(req) {
   return new URLSearchParams(i === -1 ? '' : req.url.slice(i + 1));
 }
 
-export function clientIp(req, trustProxy = false) {
+// How to find the visitor's address behind a proxy:
+//   CLIENT_IP_HEADER  a header the proxy sets and visitors can't forge, e.g.
+//                     cf-connecting-ip (Cloudflare, used by Render).
+//   TRUST_PROXY=true  otherwise use the first X-Forwarded-For entry.
+export function proxySettings(env = {}) {
+  const header = String(env.CLIENT_IP_HEADER || '').trim().toLowerCase();
+  return { trust: envFlag(env.TRUST_PROXY, false), header: /^[a-z0-9-]{1,64}$/.test(header) ? header : '' };
+}
+
+// proxy: true/false (TRUST_PROXY) or the result of proxySettings().
+export function clientIp(req, proxy = false) {
+  const { trust: trustProxy, header } = typeof proxy === 'object' ? proxy : { trust: proxy, header: '' };
+  const fromHeader = header ? String(req.headers?.[header] || '').split(',')[0].trim() : '';
+  if (fromHeader) return fromHeader;
   if (trustProxy) {
     const fwd = String(req.headers?.['x-forwarded-for'] || '').split(',')[0].trim();
     if (fwd) return fwd;
@@ -118,6 +156,20 @@ export function rateLimited(res, retryAfter, message = 'Too many requests. Pleas
 
 export function isProduction(env = {}) {
   return (env.NODE_ENV || process.env.NODE_ENV) === 'production';
+}
+
+// In production the host's proxy terminates HTTPS and tells us the original
+// scheme in X-Forwarded-Proto. Requests that came in over plain http are sent
+// to the same path on APP_URL (never to the Host header, which anyone can set).
+// Returns the address to redirect to, or null.
+export function httpsRedirect(req, env = {}) {
+  if (!isProduction(env) || String(env.COOKIE_SECURE).trim() === 'false') return null;
+  const appUrl = String(env.APP_URL || '').trim().replace(/\/$/, '');
+  if (!/^https:\/\//.test(appUrl)) return null;
+  const proto = String(req.headers?.['x-forwarded-proto'] || '').split(',')[0].trim().toLowerCase();
+  if (proto !== 'http') return null;
+  const path = String(req.url || '/');
+  return appUrl + (path.startsWith('/') ? path : '/');
 }
 
 export function envFlag(value, fallback) {

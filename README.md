@@ -27,7 +27,7 @@ It searches real job listings, turns everyday experience (class projects, volunt
 | **Dashboard** | **Your next steps** for open applications, progress, pipeline by status, saved jobs, upcoming interviews, missions, recent activity — all from your real data. |
 | **Accounts** | Sign up, sign in, sign out, password reset, change password, delete account. Copy guest data into a new account. |
 | **Settings** | Profile, account, plan and AI usage this month, AI connection, backup/restore, delete all data. |
-| **Plans** | Every account is on **Free** (30 AI requests a month, configurable). The server is ready for a future **Premium** plan; there are no payments or upgrade buttons yet. See [docs/LAUNCH.md](docs/LAUNCH.md). |
+| **Plans** | **Free**: 20 AI requests a month. **Premium** (Stripe subscription, monthly and optionally yearly): 200 AI requests a month. Both limits are configurable. The **Plans & Pricing** page (sidebar) compares the plans and starts Stripe Checkout; Settings and the Dashboard link to it. Card changes and cancellation happen on Stripe-hosted pages. Premium can only be bought when Stripe is configured; see [Premium subscriptions (Stripe)](#premium-subscriptions-stripe). |
 
 ### Honesty rules built into the app
 
@@ -92,8 +92,8 @@ Every API is **optional**: the app starts without any keys and each feature expl
 | `JSEARCH_COUNTRY` | Optional | Default search country (`us`, `ca`, `gb`, …). |
 | `ANTHROPIC_API_KEY` | AI features | From <https://console.anthropic.com> (starts with `sk-ant-`). |
 | `AI_MODEL` | Optional | Defaults to `claude-sonnet-5-5`. Set `claude-opus-5-5` for the most capable model (higher cost per request). |
-| `AI_FREE_MONTHLY_LIMIT` | Optional | AI requests per signed-in user per month on the Free plan (default 30). Failed requests don't count. |
-| `AI_PREMIUM_MONTHLY_LIMIT` | Optional | Same for the Premium plan (default 300). Nobody is on Premium until billing exists. |
+| `AI_FREE_MONTHLY_LIMIT` | Optional | AI requests per signed-in user per month on the Free plan (default 20). Failed requests don't count. |
+| `AI_PREMIUM_MONTHLY_LIMIT` | Optional | Same for the Premium plan (default 200). |
 | `DATABASE_PATH` | Accounts | SQLite file. Default `data/first-job-ai.db`. Use a persistent disk in production. |
 | `APP_URL` | Password reset (production) | Public URL of the site, e.g. `https://firstjob.example.com`. |
 | `RESEND_API_KEY`, `EMAIL_FROM` | Password reset emails | From <https://resend.com>, with a verified sender domain. |
@@ -101,6 +101,11 @@ Every API is **optional**: the app starts without any keys and each feature expl
 | `TRUST_PROXY` | Optional | `true` behind a proxy that sets `X-Forwarded-For` (for correct rate limiting). |
 | `COOKIE_SECURE` | Optional | Defaults to `true` in production. Only set `false` to test the production build over plain `http://`. |
 | `API_REQUIRE_AUTH` | Optional | Defaults to `true` in production: only signed-in users can use AI/job search (protects your paid keys). |
+| `STRIPE_SECRET_KEY` | Premium | Stripe secret key (`sk_test_…` while testing, `sk_live_…` when live). Server only. |
+| `STRIPE_WEBHOOK_SECRET` | Premium | Signing secret of the webhook endpoint (`whsec_…`). |
+| `STRIPE_PRICE_MONTHLY` | Premium | Price ID (`price_…`) of the monthly Premium price. |
+| `STRIPE_PRICE_YEARLY` | Optional | Price ID of a yearly Premium price. Blank = monthly only. |
+| `STRIPE_EXTRA_PREMIUM_PRICES` | Optional | Comma-separated older Premium price IDs that should still count as Premium after you change prices. |
 
 ### Connect real job search (JSearch by OpenWeb Ninja)
 
@@ -137,6 +142,95 @@ When you're signed in, everything you save — profile, resume, **saved jobs**, 
 - **Production without Resend:** password reset is turned off and the page says so.
 - If Resend refuses a message (for example, unverified domain), the user sees "We couldn't send the email" and the server log shows Resend's reason.
 
+### Premium subscriptions (Stripe)
+
+Premium is a recurring Stripe subscription. Payment, card changes and cancellation all happen on **Stripe-hosted pages** (Checkout and the customer portal), so card details never reach this app or its database.
+
+**How it works:**
+- The browser only asks for "monthly" or "yearly". The server picks the Price ID from `.env`, finds or creates the Stripe customer for the signed-in user, and refuses if that user already has a subscription.
+- A user becomes Premium only after the server has read their subscription from Stripe. That happens in a webhook whose signature checks out, or when the success page asks the server to verify the checkout session with Stripe. Landing on the success page alone grants nothing.
+- Premium lasts while the subscription is `active` or `trialing`.
+  - During a failed payment (`past_due`), Premium continues for up to 14 days while Stripe retries the card.
+  - When the subscription is canceled, unpaid or expired, the account goes back to Free.
+  - A **full refund of the latest payment**, or a **dispute (chargeback)**, cancels the subscription immediately in Stripe and the account goes back to Free, so the customer isn't charged again. Partial refunds and refunds of older months change nothing.
+  - If a webhook is ever missed, Premium still ends 3 days after the paid period.
+- **Live-mode safety lock:** a live key (`sk_live_…`) takes no payments until `STRIPE_ALLOW_LIVE=true` is also set. Test keys need no unlock.
+- Deleting an account cancels its subscription first. If Stripe can't be reached, the account is kept so nobody is billed for a deleted account.
+
+**1. Set up Stripe in test mode** (test mode is called a *sandbox* in newer dashboards; nothing is really charged):
+
+1. Create an account at <https://dashboard.stripe.com/register> and make sure you're in test mode / a sandbox. You don't need to activate payments yet.
+2. **Product catalog → Add product**:
+   - Name: "First Job AI Premium".
+   - Add a **recurring, monthly** price (for example $9.99).
+   - Optionally add a second **recurring, yearly** price on the same product.
+   - Save, then open each price and copy its **Price ID** (`price_…`, not the product's `prod_…`).
+3. **Developers → API keys**: copy the **Secret key** (`sk_test_…`). The publishable key is not needed.
+4. **Settings → Billing → Customer portal** (test mode): turn on:
+   - cancel subscriptions (choose "at end of billing period");
+   - update payment methods;
+   - optionally switch plans (add your Premium product's prices).
+
+   Add your terms and privacy links, then **Save**.
+5. **Settings → Billing → Subscriptions and emails → Manage failed payments**: keep retries on and choose what happens when all retries fail. "Cancel the subscription" is the simplest. The app also stops Premium 14 days after a payment fails.
+6. In `.env`:
+   ```
+   STRIPE_SECRET_KEY=sk_test_...
+   STRIPE_PRICE_MONTHLY=price_...
+   STRIPE_PRICE_YEARLY=price_...      (or leave blank)
+   ```
+
+**2. Receive webhooks locally with the Stripe CLI:**
+
+1. Install the Stripe CLI (<https://docs.stripe.com/stripe-cli>), then in a second VS Code terminal:
+   ```powershell
+   npm run stripe:listen
+   ```
+   This uses the test key from `.env`, so events come from the **same Stripe account as the app**, even if `stripe login` was done with a different account. It forwards the events the app needs to `localhost:5173/api/billing/webhook` (the `npm run dev` port; add `-- --port 3000` for `npm start`). It refuses live keys.
+2. It tells you whether `STRIPE_WEBHOOK_SECRET` in `.env` matches. If not, copy the printed `whsec_…` into `.env`, save, and restart `npm run dev`.
+3. The startup line should say `Premium billing: test mode`, with no `[config]` warnings about Stripe.
+
+Using the plain CLI instead? Newer versions require an event list: `stripe listen --events checkout.session.completed,customer.subscription.created,customer.subscription.updated,customer.subscription.deleted,invoice.paid,invoice.payment_failed,charge.refunded,charge.dispute.created --forward-to localhost:5173/api/billing/webhook`, and the CLI must be logged in to the same account as your key.
+
+**3. Test it** (keep `npm run stripe:listen` running):
+
+| Test | How | Expected |
+| --- | --- | --- |
+| Successful subscription | Sign in → **Plans & Pricing** (sidebar) → choose Monthly or Yearly → **Subscribe**. Pay with card `4242 4242 4242 4242`, any future date, any CVC, any postal code. | You return to "Welcome to Premium"; Settings shows Premium and 200 AI requests; the listener shows `200` responses. |
+| Canceled checkout | Click Upgrade, then the back arrow on the Stripe page. | "Checkout canceled", still Free. |
+| Can't buy twice | Click Upgrade again while Premium. | The button is gone; the API answers "You already have a subscription". |
+| Cancellation | **Manage subscription** → Cancel. | Settings says Premium stays active until the period end. In the Dashboard, cancel it immediately (Subscriptions → … → Cancel immediately) to see it switch to Free. |
+| Failed payment | Subscribe with card `4000 0000 0000 0341` (attaches, but charges fail). Then use a [test clock](https://docs.stripe.com/billing/testing/test-clocks) or the Dashboard to bill again. | Status "Payment failed", warning to update the card; Free after the retries end. |
+| Renewal and expiry | Billing → **Test clocks**: create a customer on a clock, subscribe, advance the clock past the period end. | Status stays Active after renewal; ends when the subscription is canceled. |
+| Full refund | While Premium: Dashboard → **Payments** → the payment → **Refund** → full amount. | the listener shows `charge.refunded` → `200`; the subscription is canceled; Settings shows Free. |
+| Partial refund | Refund only part of a payment. | Still Premium. |
+| Dispute | Subscribe with card `4000 0000 0000 0259` (creates a dispute after paying). | The subscription is canceled; Settings shows Free. |
+
+`stripe trigger …` commands create customers that don't belong to any account. The app acknowledges those events and correctly ignores them, so use the real checkout flow to test Premium.
+
+**4. Go live (only when you're ready to charge real people):**
+
+Things only you can do in Stripe (the app can't do them for you):
+- **Activate your account**: legal name or business type, address, date of birth, the last digits of a government ID or tax number (e.g. SSN/EIN in the US), and a phone number. Stripe may ask for an ID photo.
+- **Add a bank account** for payouts (Settings → Business → Bank accounts and currencies).
+- **Public business details**: the name customers see on card statements (statement descriptor), a support email, and the website URL.
+- **Tax**: decide whether you must charge sales tax/VAT where your customers live. Stripe Tax can calculate it, but whether you need to register is a question for you (or an accountant). The app doesn't turn on tax collection.
+- **Terms of service, privacy policy and refund policy** pages, linked in the customer portal and Checkout settings.
+
+Then:
+1. Switch the Dashboard to **live mode**.
+2. Recreate the product and prices in live mode (test objects don't exist in live mode) and copy the live Price IDs.
+3. Save the customer portal and failed-payment settings again in live mode.
+4. **Developers → Webhooks → Add endpoint**:
+   - URL: `https://YOUR-DOMAIN/api/billing/webhook` (must be `https://`).
+   - Select these events: `checkout.session.completed`, `checkout.session.async_payment_succeeded`, `checkout.session.async_payment_failed`, `customer.subscription.created`, `customer.subscription.updated`, `customer.subscription.deleted`, `customer.subscription.paused`, `customer.subscription.resumed`, `customer.subscription.trial_will_end`, `invoice.paid`, `invoice.payment_succeeded`, `invoice.payment_failed`, `charge.refunded`, `charge.dispute.created`.
+   - Copy the endpoint's signing secret.
+   - Your **test-mode** setup needs the two new events too if you use a Dashboard endpoint there. (`npm run stripe:listen` already includes them.)
+5. In your host's environment settings (not in Git), set `STRIPE_SECRET_KEY=sk_live_…`, `STRIPE_WEBHOOK_SECRET` (live endpoint), the live `STRIPE_PRICE_*`, `APP_URL=https://YOUR-DOMAIN`, and **`STRIPE_ALLOW_LIVE=true`**. Redeploy.
+6. The server log should say `Premium billing: LIVE`. If it says `locked`, `STRIPE_ALLOW_LIVE` is missing. Make one real purchase with your own card, check Settings shows Premium and the webhook shows `200` in the Dashboard, then refund it in full from the Dashboard. That refund also tests refund handling: your account should return to Free.
+
+To switch real payments off again at any time, remove `STRIPE_ALLOW_LIVE` (or set it to `false`) and redeploy. Existing subscriptions keep renewing in Stripe, and their webhooks are still processed.
+
 ---
 
 ## Testing
@@ -170,13 +264,17 @@ The tests never call the real JSearch or Anthropic APIs; those calls are simulat
 
 The app is a single Node.js server (`server/index.js`) that serves the built site and the API from the **same address**, so the frontend always talks to the right backend with no extra URL setting. It needs a host that runs a long-lived Node process **with a persistent disk** for the SQLite file — for example Render (with a disk), Railway (with a volume), Fly.io (with a volume) or a small VPS. Purely static/serverless hosts (Netlify, Vercel functions, GitHub Pages) are **not** suitable for accounts as-is.
 
-Example: **Render**
+**Step-by-step launch guide (Render, domain, Stripe live mode): [docs/DEPLOY.md](docs/DEPLOY.md).** The repository includes a Render Blueprint ([render.yaml](render.yaml)) and a read-only launch check (`npm run check:production`).
+
+In short, on Render:
 
 1. Push the repository to GitHub (`.env` and `data/` are ignored — check with `git status`).
-2. New **Web Service** → your repo. Build command: `npm install && npm run build`. Start command: `npm start`.
-3. Add a **Disk** mounted at `/var/data`; set `DATABASE_PATH=/var/data/first-job-ai.db`.
-4. Set environment variables in the dashboard: `NODE_ENV=production`, `APP_URL=https://<your-app>.onrender.com`, `TRUST_PROXY=true`, plus `JSEARCH_API_KEY`, `JSEARCH_MONTHLY_LIMIT`, `ANTHROPIC_API_KEY`, `RESEND_API_KEY`, `EMAIL_FROM` as needed.
+2. New **Blueprint** → your repo (or a Web Service with build command `npm ci --include=dev && npm run build` — the `--include=dev` matters because `NODE_ENV=production` would skip Vite — and start command `npm start`).
+3. A **Disk** mounted at `/var/data` with `DATABASE_PATH=/var/data/first-job-ai.db`. Without it, every deploy erases all accounts and subscriptions.
+4. Environment variables in the dashboard (see [docs/DEPLOY.md](docs/DEPLOY.md)).
 5. Use **one instance** (rate limits and the job-search cache are kept in memory; SQLite is a single file).
+
+In production the server also writes a consistent database backup at startup and every 24 hours to `backups/` next to the database (keeps 14; `BACKUP_DIR`, `BACKUP_KEEP`, `BACKUP_DISABLED=true` to change), and `npm run backup` makes one on demand.
 
 ### Deployment checklist
 
@@ -189,7 +287,9 @@ Example: **Render**
 - [ ] `JSEARCH_MONTHLY_LIMIT` matches your JSearch plan.
 - [ ] The first lines of the server log say AI / Job search / Reset email are `on` as expected, with no `[config]` warnings you didn't expect.
 - [ ] Resend sender domain verified if you want password reset.
-- [ ] Back up the database file regularly (copy it while the app is stopped, or use your host's snapshots).
+- [ ] The log shows `[backup] Wrote …` after start; copy a backup off the server now and then.
+- [ ] `npm run check:production` (in the host's shell) shows no ✖.
+- [ ] If Premium is on: live Stripe keys, live Price IDs and the live webhook secret are set; the log says `Premium billing: LIVE`; one real purchase, cancellation and refund were tested.
 
 ### Verify the deployed app
 
@@ -198,6 +298,7 @@ Example: **Render**
 3. In a private window (signed out), Job Search asks you to sign in; signed in, a search returns listings.
 4. **Settings → AI connection** shows Connected (if you set a key).
 5. "Forgot password" sends an email (if Resend is configured).
+6. **HTTPS:** the address bar shows a padlock on `https://your-app`. In PowerShell, `curl.exe -sI http://your-app/` should answer `301`, `302` or `308` with `Location: https://…` (your host or the app redirects), and `curl.exe -sI https://your-app/` should include `Strict-Transport-Security`.
 
 ---
 
@@ -207,6 +308,13 @@ Example: **Render**
 - Passwords are hashed with scrypt and a random salt; sessions are random tokens stored hashed in the database, sent as `HttpOnly`, `SameSite=Lax` (and `Secure` in production) cookies.
 - Every data request uses the user id from the session, so users can only read and write their own data.
 - Each signed-in user has a monthly AI allowance (`AI_FREE_MONTHLY_LIMIT`), so one account can't run up your Anthropic bill.
+- Billing:
+  - No card data is stored: only Stripe customer and subscription IDs, the price, status and dates.
+  - Checkout, portal and sync require sign-in and are rate limited.
+  - The server chooses the price.
+  - Webhooks are verified with `STRIPE_WEBHOOK_SECRET` against the raw body and processed once per event ID.
+  - Premium is worked out from Stripe-verified subscription data on every request. No endpoint lets a user set their own plan.
+  - Webhook payloads are never logged.
 - State-changing API requests must be JSON from the same origin (CSRF protection). Sign-in, sign-up, reset, AI and job search are rate limited.
 - The production server sends a Content-Security-Policy and other security headers, and blocks path traversal.
 - Guest data stays in the browser's localStorage. When signed in, data is not copied into localStorage.
@@ -227,6 +335,8 @@ first-job-ai/
 │   ├── config.js        Checks settings at startup and explains problems
 │   ├── aiHandler.js     Anthropic AI tasks
 │   ├── plans.js         Free/Premium plans and the monthly AI allowance
+│   ├── billing.js       Stripe Checkout, customer portal, webhooks
+│   ├── billingStore.js  Subscriptions in the database and the Premium rule
 │   └── http.js          Shared HTTP helpers and rate limiter
 ├── src/
 │   ├── pages/           One file per page (JobSearch, CoverLetters, CareerAssistant, Auth, …)

@@ -2,6 +2,7 @@ import { Link } from 'react-router-dom';
 import Icon from '../components/Icon.jsx';
 import { EmptyState, ProgressBar, ProgressRing } from '../components/ui.jsx';
 import MissionItem from '../components/MissionItem.jsx';
+import { UpgradeBanner } from './Pricing.jsx';
 import { useAppData } from '../context/AppDataContext.jsx';
 import { useToast } from '../context/ToastContext.jsx';
 import { resumeChecklist, resumeCompleteness } from '../lib/resume.js';
@@ -82,6 +83,8 @@ export default function Dashboard() {
           </Link>
         </div>
       </header>
+
+      <UpgradeBanner />
 
       <section className="stat-strip panel" aria-label="Your numbers">
         <Link to="/tracker" className="stat">

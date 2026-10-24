@@ -1,9 +1,10 @@
-import { useEffect, useRef, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import Icon from '../components/Icon.jsx';
 import { ConfirmDialog, Modal } from '../components/Modal.jsx';
 import { Field, PageHeader, ProgressBar, Spinner } from '../components/ui.jsx';
 import { apiFetch } from '../lib/api.js';
+import { fetchBillingStatus, hasOpenSubscription, openBillingPortal, subscriptionStatusText } from '../lib/billing.js';
 import { useAppData } from '../context/AppDataContext.jsx';
 import { useToast } from '../context/ToastContext.jsx';
 import { useAuth } from '../context/AuthContext.jsx';
@@ -189,35 +190,148 @@ function AiSettings() {
   );
 }
 
-// Plan and AI allowance from the server. There is no upgrade button on
-// purpose: payments are not set up yet.
-function PlanUsage() {
-  const [usage, setUsage] = useState(null);
-  const [failed, setFailed] = useState(false);
-  useEffect(() => {
-    let cancelled = false;
-    apiFetch('/api/usage')
-      .then((res) => !cancelled && setUsage(res.ai))
-      .catch(() => !cancelled && setFailed(true));
-    return () => {
-      cancelled = true;
-    };
+// Plan, AI allowance and Premium billing. Everything shown here comes from
+// the server; Premium only appears as active once Stripe has confirmed it.
+function PlanSettings() {
+  const toast = useToast();
+  const [params, setParams] = useSearchParams();
+  const [state, setState] = useState({ loading: true, usage: null, billing: null, error: '' });
+  const [busy, setBusy] = useState(''); // '' | 'portal'
+  const [actionError, setActionError] = useState('');
+
+  const load = useCallback(async () => {
+    try {
+      const [usage, billing] = await Promise.all([apiFetch('/api/usage'), fetchBillingStatus()]);
+      setState({ loading: false, usage: usage.ai, billing, error: '' });
+    } catch (err) {
+      setState({ loading: false, usage: null, billing: null, error: err.message });
+    }
   }, []);
 
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  // Back from the Stripe customer portal: show the latest state.
+  useEffect(() => {
+    if (params.get('billing') === 'updated') {
+      toast.success('Billing details refreshed.');
+      setParams({}, { replace: true });
+      load();
+    }
+  }, [params, setParams, load, toast]);
+
+  const run = async (kind, fn) => {
+    setBusy(kind);
+    setActionError('');
+    try {
+      await fn(); // On success the browser is leaving for Stripe, so the button stays busy.
+    } catch (err) {
+      setActionError(err.message);
+      setBusy('');
+      if (err.code === 'already_subscribed') load();
+    }
+  };
+
+  const { usage, billing } = state;
+  const sub = billing?.subscription;
+  const open = hasOpenSubscription(billing);
+  // Free users always see the way to Premium; the Pricing page explains if it can't be bought yet.
+  const canUpgrade = billing?.plan === 'free' && !open;
+
   return (
-    <div className="data-row">
-      <div>
-        <strong>Plan: {usage ? usage.planLabel : '…'}</strong>
-        <p className="subtle">
-          {failed
-            ? 'Your AI usage couldn’t be loaded right now.'
-            : usage
-              ? `${usage.used} of ${usage.limit} AI requests used this month. Resets on ${formatDate(usage.resetsOn)}. Basic-mode tools are always unlimited.`
-              : 'Loading your AI usage…'}
-        </p>
+    <section className="panel" id="plan">
+      <div className="panel-header">
+        <div>
+          <h2>Plan</h2>
+          <p className="subtle">Your plan and how much AI you’ve used this month.</p>
+        </div>
+        {billing?.plan && <span className={`badge ${billing.plan === 'premium' ? 'badge-accent' : ''}`}>{billing.plan === 'premium' ? 'Premium' : 'Free'}</span>}
       </div>
-      {usage && <ProgressBar value={usage.limit ? Math.min(100, (usage.used / usage.limit) * 100) : 100} label="AI requests used this month" tone={usage.used >= usage.limit ? 'warn' : 'accent'} />}
-    </div>
+      <div className="panel-body data-actions">
+        {state.loading ? (
+          <p className="muted small with-icon">
+            <Spinner /> Loading your plan…
+          </p>
+        ) : state.error ? (
+          <div className="alert alert-error">
+            <Icon name="alert" size={16} /> Your plan couldn’t be loaded ({state.error}).{' '}
+            <button className="link-btn" onClick={load}>
+              Try again
+            </button>
+          </div>
+        ) : (
+          <>
+            {usage && (
+              <div className="data-row">
+                <div>
+                  <strong>AI requests this month</strong>
+                  <p className="subtle">
+                    {usage.used} of {usage.limit} used on the {usage.planLabel} plan. Resets on {formatDate(usage.resetsOn)}. Failed requests don’t count, and Basic-mode tools are always unlimited.
+                  </p>
+                </div>
+                <ProgressBar value={usage.limit ? Math.min(100, (usage.used / usage.limit) * 100) : 100} label="AI requests used this month" tone={usage.used >= usage.limit ? 'warn' : 'accent'} />
+              </div>
+            )}
+
+            {sub && (
+              <div className="data-row">
+                <div>
+                  <strong>Subscription: {subscriptionStatusText(sub.status)}</strong>
+                  <p className="subtle">
+                    {sub.interval === 'year' ? 'Yearly' : 'Monthly'} Premium
+                    {sub.currentPeriodEnd && open
+                      ? sub.cancelAtPeriodEnd
+                        ? `. Canceled: Premium stays active until ${formatDate(sub.currentPeriodEnd)}, and you won’t be charged again.`
+                        : `. Renews on ${formatDate(sub.currentPeriodEnd)}.`
+                      : sub.endedAt
+                        ? `. Ended on ${formatDate(sub.endedAt)}.`
+                        : '.'}
+                  </p>
+                </div>
+              </div>
+            )}
+            {sub?.status === 'past_due' && (
+              <div className="alert alert-warn">
+                <Icon name="alert" size={16} /> Your last payment didn’t go through. Update your card under “Manage subscription” to keep Premium.
+              </div>
+            )}
+
+            {canUpgrade && (
+              <div className="data-row plan-upgrade">
+                <div>
+                  <strong>Premium</strong>
+                  <p className="subtle">
+                    {billing.aiLimits.premium} AI requests a month instead of {billing.aiLimits.free}, for job analysis, resume suggestions, cover letters, and interview questions and feedback. Monthly or yearly, cancel anytime.
+                  </p>
+                </div>
+                <Link to="/pricing" className="btn btn-primary">
+                  <Icon name="spark" size={15} /> Upgrade to Premium
+                </Link>
+              </div>
+            )}
+            {billing?.canManage && (
+              <div className="data-row">
+                <div>
+                  <strong>Manage subscription</strong>
+                  <p className="subtle">Change your card, switch between monthly and yearly, see invoices or cancel. Opens Stripe’s secure billing page.</p>
+                </div>
+                <button className="btn btn-secondary" disabled={Boolean(busy)} onClick={() => run('portal', openBillingPortal)}>
+                  {busy === 'portal' ? <Spinner /> : <Icon name="external" size={15} />}
+                  {busy === 'portal' ? 'Opening…' : 'Manage subscription'}
+                </button>
+              </div>
+            )}
+            {billing?.configured && <p className="subtle">Payments are handled by Stripe. First Job AI never sees or stores your card details.</p>}
+            {actionError && (
+              <div className="alert alert-error" role="alert">
+                <Icon name="alert" size={16} /> {actionError}
+              </div>
+            )}
+          </>
+        )}
+      </div>
+    </section>
   );
 }
 
@@ -325,7 +439,6 @@ function AccountSettings() {
         </button>
       </div>
       <div className="panel-body data-actions">
-        <PlanUsage />
         <form className="data-row account-password" onSubmit={changePassword} noValidate>
           <div>
             <strong>Change password</strong>
@@ -519,6 +632,7 @@ function DataSettings() {
 
 export default function Settings() {
   const { data, saveError } = useAppData();
+  const auth = useAuth();
   return (
     <div className="settings-page">
       <PageHeader title="Settings" description="Edit your profile, connect AI and manage your saved data." />
@@ -529,6 +643,7 @@ export default function Settings() {
       )}
       <div className="settings-stack">
         <AccountSettings />
+        {auth.user && <PlanSettings />}
         <ProfileForm key={data.profile?.createdAt || 'profile'} />
         <AiSettings />
         <DataSettings />

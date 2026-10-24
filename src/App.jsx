@@ -13,6 +13,8 @@ import InterviewPractice from './pages/InterviewPractice.jsx';
 import ExperienceTranslator from './pages/ExperienceTranslator.jsx';
 import CareerMissions from './pages/CareerMissions.jsx';
 import Settings from './pages/Settings.jsx';
+import { BillingCancel, BillingSuccess } from './pages/Billing.jsx';
+import Pricing from './pages/Pricing.jsx';
 import NotFound from './pages/NotFound.jsx';
 import { ForgotPassword, ResetPassword, SignIn, SignUp } from './pages/Auth.jsx';
 
@@ -37,6 +39,9 @@ export default function App() {
         <Route path="/translator" element={<ExperienceTranslator />} />
         <Route path="/missions" element={<CareerMissions />} />
         <Route path="/settings" element={<Settings />} />
+        <Route path="/pricing" element={<Pricing />} />
+        <Route path="/billing/success" element={<BillingSuccess />} />
+        <Route path="/billing/cancel" element={<BillingCancel />} />
       </Route>
       <Route path="/app" element={<Navigate to="/dashboard" replace />} />
       <Route path="*" element={<NotFound />} />

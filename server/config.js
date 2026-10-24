@@ -5,8 +5,9 @@
 
 import { COUNTRIES, PROVIDERS, resolveProvider } from './jobsHandler.js';
 import { isProduction } from './http.js';
+import { billingConfig } from './billing.js';
 
-const SECRET_NAMES = ['ANTHROPIC_API_KEY', 'JSEARCH_API_KEY', 'RAPIDAPI_KEY', 'RESEND_API_KEY'];
+const SECRET_NAMES = ['ANTHROPIC_API_KEY', 'JSEARCH_API_KEY', 'RAPIDAPI_KEY', 'RESEND_API_KEY', 'STRIPE_SECRET_KEY', 'STRIPE_WEBHOOK_SECRET'];
 const blank = (v) => v === undefined || v === null || String(v).trim() === '';
 
 // Returns { errors: string[], warnings: string[], features: { ai, jobs, email } }.
@@ -45,6 +46,38 @@ export function checkConfig(env = {}) {
     warnings.push(`JSEARCH_COUNTRY "${env.JSEARCH_COUNTRY}" is not supported, so "us" is used. Supported: ${COUNTRIES.join(', ')}.`);
   }
 
+  // Premium subscriptions (Stripe)
+  const billing = billingConfig(env);
+  const stripeKey = billing.secretKey;
+  const anyStripe = ['STRIPE_SECRET_KEY', 'STRIPE_WEBHOOK_SECRET', 'STRIPE_PRICE_MONTHLY', 'STRIPE_PRICE_YEARLY'].some((k) => !blank(env[k]));
+  if (stripeKey && !/^(sk|rk)_(test|live)_/.test(stripeKey)) {
+    warnings.push('STRIPE_SECRET_KEY should start with sk_test_ (test mode) or sk_live_ (live mode). The publishable key (pk_...) is not needed.');
+  }
+  if (stripeKey && /^(sk|rk)_live_/.test(stripeKey) && !production) {
+    warnings.push('STRIPE_SECRET_KEY is a LIVE key on a development server. Use your sk_test_ key while developing so no real cards are charged.');
+  }
+  if (stripeKey && billing.testMode && production) {
+    warnings.push('STRIPE_SECRET_KEY is a test key in production: checkout works, but nobody is really charged.');
+  }
+  if (!blank(env.STRIPE_WEBHOOK_SECRET) && !String(env.STRIPE_WEBHOOK_SECRET).trim().startsWith('whsec_')) {
+    warnings.push('STRIPE_WEBHOOK_SECRET should start with whsec_ (the endpoint’s signing secret, not an API key).');
+  }
+  for (const [name, interval] of [['STRIPE_PRICE_MONTHLY', 'month'], ['STRIPE_PRICE_YEARLY', 'year']]) {
+    if (!blank(env[name]) && !billing.prices[interval]) warnings.push(`${name} should be a Price ID that starts with price_ (not a product ID prod_...).`);
+  }
+  if (billing.liveBlocked) {
+    warnings.push('STRIPE_SECRET_KEY is a LIVE key, but STRIPE_ALLOW_LIVE is not "true", so Premium checkout is off (safety lock). Set STRIPE_ALLOW_LIVE=true only when you are ready to take real payments.');
+  } else if (anyStripe && !billing.configured) {
+    warnings.push('Premium is off until STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET and STRIPE_PRICE_MONTHLY are all set.');
+  }
+  // Real payments need a real HTTPS address for Stripe to send customers back to.
+  if (billing.configured && billing.live && production && !blank(env.APP_URL) && !/^https:\/\//.test(String(env.APP_URL).trim())) {
+    errors.push('Live Stripe payments need APP_URL to start with https://. Set it to the public https:// address of the site.');
+  }
+  if (billing.configured && production && blank(env.APP_URL)) {
+    warnings.push('APP_URL is not set: Stripe Checkout can’t send people back to the site, so Premium checkout is turned off.');
+  }
+
   // Password-reset email (Resend)
   const hasResendKey = !blank(env.RESEND_API_KEY);
   const hasFrom = !blank(env.EMAIL_FROM);
@@ -61,6 +94,10 @@ export function checkConfig(env = {}) {
     if (blank(env.APP_URL)) warnings.push('APP_URL is not set: password reset is turned off in production. Set it to the public https:// address of the site.');
     else if (!/^https:\/\//.test(String(env.APP_URL).trim())) warnings.push('APP_URL should start with https:// in production.');
     if (!hasResendKey || !hasFrom) warnings.push('RESEND_API_KEY / EMAIL_FROM are not both set: password reset is turned off in production.');
+    // Accounts and subscriptions live in this file, so it must be on storage that survives redeploys.
+    if (blank(env.DATABASE_PATH) || !/^(\/|[A-Za-z]:[\\/])/.test(String(env.DATABASE_PATH).trim())) {
+      warnings.push('DATABASE_PATH is not an absolute path. On hosts like Render, files outside the persistent disk are erased on every deploy, which would delete all accounts and subscriptions. Set it to a file on the disk, e.g. /var/data/first-job-ai.db.');
+    }
   }
 
   return {
@@ -70,6 +107,7 @@ export function checkConfig(env = {}) {
       ai: Boolean(anthropicKey),
       jobs: jobsKey ? PROVIDERS[resolveProvider(env)].label : false,
       email: hasResendKey && hasFrom,
+      billing: billing.configured ? (billing.testMode ? 'test mode' : 'LIVE') : billing.liveBlocked ? 'locked (live key without STRIPE_ALLOW_LIVE)' : false,
     },
   };
 }
@@ -79,7 +117,7 @@ export function reportConfig(env = {}, log = console) {
   const result = checkConfig(env);
   const on = (v) => (v ? 'on' : 'off');
   log.info?.(
-    `[First Job AI] AI: ${on(result.features.ai)} · Job search: ${result.features.jobs ? `on (${result.features.jobs})` : 'off'} · Reset email: ${on(result.features.email)}`,
+    `[First Job AI] AI: ${on(result.features.ai)} · Job search: ${result.features.jobs ? `on (${result.features.jobs})` : 'off'} · Reset email: ${on(result.features.email)} · Premium billing: ${result.features.billing || 'off'}`,
   );
   for (const w of result.warnings) log.warn?.(`[config] ${w}`);
   for (const e of result.errors) log.error?.(`[config] ERROR: ${e}`);

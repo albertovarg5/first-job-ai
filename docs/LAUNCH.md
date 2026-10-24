@@ -12,6 +12,7 @@ Last updated: October 2026.
 | --- | --- | --- | --- | --- |
 | **Anthropic API** | AI tools: job analysis, resume suggestions, cover letters, interview questions and feedback, summaries | Optional (Basic mode works without it) | Pay per token used | console.anthropic.com → API keys and Billing |
 | **JSearch** (OpenWeb Ninja or RapidAPI) | Real job listings | Optional (Job Search shows setup steps without it) | Free tier, then monthly plans by number of requests | app.openwebninja.com or rapidapi.com |
+| **Stripe** | Premium subscriptions (Checkout, Billing, customer portal) | Optional (without it every account is Free) | A fee per successful payment, no monthly fee | dashboard.stripe.com |
 | **Resend** | Password-reset emails | Required in production for password reset | Free tier, then monthly plans | resend.com (needs a verified sending domain) |
 | **Hosting with a persistent disk** | Runs `npm start` and keeps the SQLite file | Required to go live | Monthly | For example Render, Railway or Fly.io, or a small VPS |
 | **Domain name + HTTPS** | Public address, secure cookies | Required to go live | Yearly | Any registrar; most hosts provide HTTPS |
@@ -42,14 +43,20 @@ These features work end to end and are covered by automated tests. The applicati
 - **Cover letters** that only use the resume and the user's notes. Requirements the resume doesn't show are listed as gaps.
 - **Interview practice** with AI or library questions, feedback and history.
 - **Dashboard** with "Your next steps" for open applications, the pipeline, upcoming interviews and activity.
-- **Plans and AI allowance:** every account is on Free. AI use is counted per user and month, failed requests are not counted, and users see their usage in Settings.
+- **Plans and AI allowance:** AI use is counted per signed-in user and month (Free 20, Premium 200, both configurable). Failed requests don't count, and users see their usage in Settings.
+- **Premium subscriptions with Stripe** (monthly, plus yearly if configured):
+  - Stripe-hosted Checkout, and a customer portal for changing the card, switching plans and canceling.
+  - Signature-verified, idempotent webhooks, and safe handling of failed payments, cancellation, expiry, full refunds and disputes.
+  - Subscriptions are canceled when an account is deleted.
+  - Live-mode safety lock: a live key takes no payments until `STRIPE_ALLOW_LIVE=true`. Production redirects plain `http://` to `https://`, and live billing refuses to start without an `https://` `APP_URL`.
+  - Tested with 24 automated tests (fake Stripe API, real signature checks), and in a browser against the built app with a fake Stripe. **Not yet tested against a real Stripe account.** See the next section.
 
 ## 3. Features that still need work
 
 Listed in rough priority order for a public launch:
 
 1. **Email verification at sign-up.** Anyone can create accounts with addresses they don't own.
-2. **Payments (Premium).** Not built, on purpose. See section 5.
+2. **A real Stripe test-mode run-through.** The payment code is finished and tested with a simulated Stripe, but it has not yet run against a real Stripe test-mode account. Follow "Premium subscriptions (Stripe)" in the README, including cancellation, a failed payment, a refund and a dispute, before charging anyone.
 3. **Terms of Service and Privacy Policy pages.** Required before collecting real users' resumes. Have them reviewed for your country.
 4. **Error monitoring and uptime alerts.** For example Sentry and an uptime checker. Today, errors only appear in the server log.
 5. **Database backups.** The SQLite file needs scheduled off-site backups.
@@ -71,30 +78,66 @@ The basics are in place: passwords are hashed with scrypt, session tokens are st
 | Resumes and job notes are stored unencrypted in SQLite | A stolen server disk exposes personal data | Use your host's disk encryption, restrict server access, back up to encrypted storage |
 | SQLite via `node:sqlite` is marked experimental by Node.js | A future Node version could change it | Pin the Node version on your host (22.13+ or 24) |
 | No automated dependency scanning | Vulnerable packages could go unnoticed | Run `npm audit` before each deploy, or turn on GitHub Dependabot |
+| Stripe objects created by hand in the Dashboard (not through the app) are ignored | A subscription you create manually won't give anyone Premium | Always let users subscribe through the app's Upgrade button |
+| A user could open Checkout in two browsers at the exact same moment | In rare cases, two subscriptions | The app closes other open checkouts and refuses a second purchase, but two clicks within the same second could both get through. Check Stripe's Subscriptions list and refund any duplicate |
+| Webhooks processed at the same moment for one subscription | A stale state could briefly be saved | Every event re-reads the subscription from Stripe, so the next event or the 3-day expiry safeguard corrects it |
+| The past-due grace period (14 days) and expiry safeguard (3 days) are fixed in code | They may not match your Stripe retry settings | Set Stripe's failed-payment rules to cancel after retries; change the constants in `server/billingStore.js` if needed |
 | AI output is shown to the user | The model can still make mistakes | The app labels AI output, removes resume quotes that don't exist, and keeps Basic mode; keep the "check before relying on it" notes |
 
-## 5. Monetization plan (not built yet)
+## 5. Monetization
 
-**Nothing is charged today.** There are no upgrade buttons, no prices on the site, and no payment code.
+Premium is implemented with Stripe but **switched off until you configure Stripe**. While developing, use only test-mode keys: no real money moves. Don't switch to live keys before completing the test-mode checklist in the README.
 
-### What is already prepared
+### How it works
 
-- `server/plans.js` defines **Free** and **Premium** with a monthly AI allowance for each, configurable through `AI_FREE_MONTHLY_LIMIT` and `AI_PREMIUM_MONTHLY_LIMIT`.
-- The database stores each user's plan (`users.plan`, default `free`) and AI usage per month (`ai_usage`).
-- `/api/usage` returns the plan and allowance, and Settings displays it.
-- **Adding Stripe later** would mean:
-  1. A Stripe Checkout page.
-  2. A webhook route that sets `users.plan` to `premium` when a subscription starts and back to `free` when it ends.
-  3. A "Manage subscription" link to the Stripe customer portal.
+- **Free:** account, real job search, saved jobs, the full tracker and workspace, Basic-mode tools, and 20 AI requests a month.
+- **Premium:** the same, with 200 AI requests a month. Nothing else is advertised, because nothing else is different yet.
+- **Price:** set in Stripe. The app shows the amount Stripe returns for the configured Price IDs, so the page and the charge can't disagree. See "Suggested pricing" below.
+- **Who is Premium:** decided only on the server, from subscription data Stripe confirmed. That means a verified webhook, or the success page asking the server to check the checkout session with Stripe. The browser can't change it, and neither can editing saved data.
+- **What is stored:** the Stripe customer ID and subscription ID, the price, status, period end, cancellation state, and processed webhook event IDs. No card data.
 
-  No other code needs to change, because the allowance already reads the plan from the database.
+### Suggested pricing
 
-### What could justify Premium
+| | Free | Premium monthly | Premium yearly |
+| --- | --- | --- | --- |
+| Price | $0 | **$9.99 / month** | **$79 / year** (the app shows "Save 34%") |
+| AI requests a month | 20 (the default) | 200 (the default) | same as monthly |
+| Everything else | All tools, unlimited Basic mode | Same | Same |
 
-The AI tools cost real money per request; job search, the tracker and Basic mode cost almost nothing. So it makes sense to:
+Why these numbers:
+- **Your cost per AI request.** The default model, Claude Sonnet 5.5, costs $2 per million input tokens and $10 per million output tokens. A typical request here (a resume plus a job posting in, a few paragraphs out) is roughly $0.02–0.05. This is an estimate: check your real spend under console.anthropic.com → Usage after a week of real traffic.
+- **A Premium user who uses all 200 requests** costs you about $4–10, and Stripe keeps about $0.59 of a $9.99 US card payment (2.9% + 30¢). At 300 requests a heavy user could cost more than they pay, so start at 200 and raise the limit once you know real usage.
+- **Free users cost money too.** 20 requests is enough to try every AI tool, and costs at most about $0.40–1.00 per active free user a month.
+- **$9.99** is below what students usually pay for comparable career tools, and job hunting often lasts only a few months, so monthly matters more than yearly. Yearly at $79 is for people who want the app through a whole graduation year.
+- Limits are environment variables, so you can change them without code changes. Prices are changed in Stripe: create a new Price, put its ID in `STRIPE_PRICE_MONTHLY`/`STRIPE_PRICE_YEARLY`, and keep the old ID in `STRIPE_EXTRA_PREMIUM_PRICES` so existing subscribers stay Premium.
 
-- **Keep free:** account, real job search, saved jobs, the full tracker and workspace, Basic-mode analysis, resume builder and PDF, plus a limited number of AI requests a month (30 by default).
-- **Premium candidates:** many more AI requests (job analysis, tailored suggestions, cover letters, interview questions and feedback), plus future additions that are genuinely useful, such as several resume versions, extra PDF layouts and voice interview practice.
+### What you keep per subscriber (estimate)
+
+This uses Stripe's standard US pricing: 2.9% + $0.30 per successful card payment, plus about 0.7% for Stripe Billing on subscriptions. Confirm current rates for your country at stripe.com/pricing. International cards (+1.5%) and currency conversion (+1%) cost more.
+
+| | Customer pays | Card fee | Billing fee | **You receive** | Per month |
+| --- | --- | --- | --- | --- | --- |
+| Monthly | $9.99 | $0.59 | $0.07 | **≈ $9.33** | $9.33 |
+| Yearly | $79.00 | $2.59 | $0.55 | **≈ $75.86** | ≈ $6.32 |
+
+Example: 100 monthly subscribers bring in about **$933 a month** after Stripe fees. That is not profit. Still to subtract:
+- **AI usage:** about $0.02–0.05 per request, so up to roughly $4–10 for a Premium user who uses all 200, and up to about $0.40–1.00 for an active Free user.
+- **Hosting:** Render at roughly $7–8 a month at launch, plus the domain (about $10–15 a year).
+- **Other services:** JSearch and Resend plans, if you go beyond their free tiers.
+- **Refunds, disputes and chargeback fees.**
+- **Sales tax or VAT** you collect and pass on, and **income tax** on the profit.
+
+Watch the real numbers for the first month: Anthropic Console → Usage, Stripe → Balance.
+
+### Refunds and disputes
+
+- To refund someone, refund their **latest payment in full** in the Stripe Dashboard. The app then cancels their subscription and moves them to Free automatically.
+- A partial refund is treated as a goodwill credit: they stay Premium.
+- A dispute (chargeback) cancels the subscription immediately, so the customer isn't billed again. Respond to the dispute in the Dashboard (Payments → Disputes).
+
+### What could justify Premium later
+
+The AI tools cost real money per request; job search, the tracker and Basic mode cost almost nothing. That's why the AI allowance is the Premium benefit today. Possible future Premium additions, only if users ask for them: several resume versions, extra PDF layouts, voice interview practice.
 
 **Before charging, measure.** Add analytics (section 3, item 6) and watch:
 
@@ -115,6 +158,7 @@ AI cost per request depends on the model and the length of the resume and postin
 - [ ] Set `JSEARCH_MONTHLY_LIMIT` to your JSearch plan's allowance.
 - [ ] Set `AI_FREE_MONTHLY_LIMIT` to what you can afford per user.
 - [ ] Set a monthly spend limit in the Anthropic Console.
+- [ ] Stripe: complete the test-mode checklist in the README (subscribe, cancel, failed payment, renewal with a test clock). Only then create live products, the live webhook endpoint and live keys. Make one real purchase, then cancel and refund it.
 - [ ] Publish Terms and Privacy pages.
 - [ ] Set up backups and error alerts.
 - [ ] Run `npm test` and `npm run build`, then go through the manual checklist in the README on the live site.

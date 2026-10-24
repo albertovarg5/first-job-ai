@@ -4,6 +4,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createAiHandler } from '../server/aiHandler.js';
 import { createApi } from '../server/api.js';
+import { createBillingStore } from '../server/billingStore.js';
 import { openDatabase } from '../server/db.js';
 import { limitReachedMessage, nextResetDate, planLimits } from '../server/plans.js';
 import { emptyResume } from '../src/lib/resume.js';
@@ -140,9 +141,9 @@ test('AI analyze route: refuses to analyze without a job description, validates 
 // ---------- Plans and AI allowance ----------
 
 test('plans: limits come from the environment with safe defaults', () => {
-  assert.deepEqual(planLimits({}), { free: 30, premium: 300 });
+  assert.deepEqual(planLimits({}), { free: 20, premium: 200 });
   assert.deepEqual(planLimits({ AI_FREE_MONTHLY_LIMIT: '5', AI_PREMIUM_MONTHLY_LIMIT: '0' }), { free: 5, premium: 0 });
-  assert.deepEqual(planLimits({ AI_FREE_MONTHLY_LIMIT: 'lots', AI_PREMIUM_MONTHLY_LIMIT: '-1' }), { free: 30, premium: 300 });
+  assert.deepEqual(planLimits({ AI_FREE_MONTHLY_LIMIT: 'lots', AI_PREMIUM_MONTHLY_LIMIT: '-1' }), { free: 20, premium: 200 });
   assert.equal(nextResetDate(new Date('2026-12-15T12:00:00Z')), '2027-01-01');
   assert.match(limitReachedMessage({ limit: 30, planLabel: 'Free', resetsOn: '2026-11-01' }), /30 AI requests.*Free plan.*2026-11-01/);
 });
@@ -186,12 +187,49 @@ test('AI allowance: counted per user, refunded on failure, blocked at the limit,
       assert.equal(u.signedIn, true);
       assert.deepEqual({ plan: u.ai.plan, used: u.ai.used, limit: u.ai.limit }, { plan: 'free', used: 2, limit: 2 });
 
-      // What a future billing webhook would do: switch the plan.
+      // Editing users.plan grants nothing: the plan comes only from a verified subscription.
       db.prepare("UPDATE users SET plan = 'premium' WHERE email = 'alice@example.com'").run();
+      assert.equal((await usage(alice)).ai.plan, 'free');
+      assert.equal((await ai(alice)).status, 403);
+
+      // What the verified Stripe webhook stores for an active Premium subscription.
+      const aliceId = db.prepare("SELECT id FROM users WHERE email = 'alice@example.com'").get().id;
+      const store = createBillingStore(db);
+      store.linkCustomer(aliceId, 'cus_alice');
+      store.saveSubscription({
+        subscriptionId: 'sub_alice',
+        userId: aliceId,
+        customerId: 'cus_alice',
+        fields: { priceId: 'price_m', interval: 'month', plan: 'premium', status: 'active', currentPeriodEnd: new Date(Date.now() + 20 * 86400000).toISOString(), cancelAtPeriodEnd: 0, cancelAt: null, canceledAt: null, endedAt: null },
+      });
       assert.equal((await ai(alice)).status, 200);
       assert.equal((await ai(alice)).status, 403);
       assert.equal((await usage(alice)).ai.planLabel, 'Premium');
     },
   );
   db.close();
+});
+
+test('backups: a consistent copy of the database is written and old copies are pruned', async () => {
+  const { mkdtempSync, readdirSync, rmSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { basename, join } = await import('node:path');
+  const { DatabaseSync } = await import('node:sqlite');
+  const { backupDatabase, backupSettings } = await import('../server/backup.js');
+  const dir = mkdtempSync(join(tmpdir(), 'fja-backup-'));
+  const db = new DatabaseSync(join(dir, 'live.db'));
+  let copy;
+  try {
+    db.exec("CREATE TABLE users (email TEXT); INSERT INTO users VALUES ('a@example.com')");
+    const settings = { ...backupSettings({ DATABASE_PATH: join(dir, 'live.db') }), keep: 2 };
+    assert.equal(settings.dir, join(dir, 'backups'));
+    const files = [0, 1, 2].map((i) => backupDatabase(db, settings, new Date(Date.UTC(2026, 9, 24, 3, 0, i))));
+    assert.deepEqual(readdirSync(settings.dir).sort(), files.slice(1).map((file) => basename(file)), 'only the newest 2 are kept');
+    copy = new DatabaseSync(files[2], { readOnly: true });
+    assert.equal(copy.prepare('SELECT email FROM users').get().email, 'a@example.com');
+  } finally {
+    copy?.close();
+    db.close();
+    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+  }
 });

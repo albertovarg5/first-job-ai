@@ -180,7 +180,7 @@ test('migrations run once and data survives reopening the database', async () =>
     first.prepare("INSERT INTO users (id, email, password_hash, created_at, password_changed_at) VALUES ('u', 'e@x.co', 'h', 'now', 'now')").run();
     first.close();
     const second = await openDatabase(file);
-    assert.equal(second.prepare('SELECT version FROM schema_version').get().version, 2);
+    assert.equal(second.prepare('SELECT version FROM schema_version').get().version, 3);
     assert.equal(second.prepare('SELECT email FROM users').get().email, 'e@x.co');
     assert.equal(second.prepare('SELECT plan FROM users').get().plan, 'free', 'existing users start on the free plan');
     second.close();

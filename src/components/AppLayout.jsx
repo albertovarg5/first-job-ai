@@ -16,6 +16,7 @@ export const NAV_ITEMS = [
   { to: '/assistant', label: 'Career Assistant', icon: 'compass' },
   { to: '/translator', label: 'Experience Translator', icon: 'translator' },
   { to: '/missions', label: 'Career Missions', icon: 'missions' },
+  { to: '/pricing', label: 'Plans & Pricing', icon: 'spark' },
   { to: '/settings', label: 'Settings', icon: 'settings' },
 ];
 

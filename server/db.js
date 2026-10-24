@@ -5,7 +5,7 @@
 import { mkdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 
-const MIGRATIONS = [
+export const MIGRATIONS = [
   `CREATE TABLE users (
      id TEXT PRIMARY KEY,
      email TEXT NOT NULL UNIQUE COLLATE NOCASE,
@@ -46,6 +46,36 @@ const MIGRATIONS = [
      period TEXT NOT NULL,
      count INTEGER NOT NULL DEFAULT 0,
      PRIMARY KEY (user_id, period)
+   );`,
+  // Stripe billing (see server/billing.js). Only Stripe ids and subscription
+  // state are stored: never card numbers or other payment details. The plan
+  // a user gets is worked out from `subscriptions`; users.plan is no longer read.
+  `CREATE TABLE billing_customers (
+     user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+     stripe_customer_id TEXT NOT NULL UNIQUE,
+     created_at TEXT NOT NULL
+   );
+   CREATE TABLE subscriptions (
+     stripe_subscription_id TEXT PRIMARY KEY,
+     user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+     stripe_customer_id TEXT NOT NULL,
+     price_id TEXT,
+     interval TEXT,
+     plan TEXT NOT NULL,
+     status TEXT NOT NULL,
+     current_period_end TEXT,
+     cancel_at_period_end INTEGER NOT NULL DEFAULT 0,
+     cancel_at TEXT,
+     canceled_at TEXT,
+     ended_at TEXT,
+     past_due_since TEXT,
+     updated_at TEXT NOT NULL
+   );
+   CREATE INDEX subscriptions_user ON subscriptions(user_id);
+   CREATE TABLE stripe_events (
+     id TEXT PRIMARY KEY,
+     type TEXT NOT NULL,
+     processed_at TEXT NOT NULL
    );`,
 ];
 

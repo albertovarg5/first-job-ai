@@ -1,0 +1,53 @@
+# Render Blueprint for First Job AI: one web service (frontend + API on the
+# same domain) with a persistent disk for the SQLite database.
+# Render dashboard → New → Blueprint → pick this repository.
+# Secrets (sync: false) are typed into the Render dashboard, never into Git.
+services:
+  - type: web
+    name: first-job-ai
+    runtime: node
+    plan: 0.5c-512mb # Smallest paid instance; a paid instance is required for a persistent disk.
+    region: oregon
+    # Dev dependencies (Vite) are needed to build the frontend.
+    buildCommand: npm ci --include=dev && npm run build
+    startCommand: npm start
+    healthCheckPath: /healthz
+    autoDeployTrigger: "off" # Deploy manually until you are confident in each change.
+    disk:
+      name: data
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_PATH
+        value: /var/data/first-job-ai.db
+      - key: TRUST_PROXY
+        value: "true"
+      - key: CLIENT_IP_HEADER
+        value: cf-connecting-ip
+      # The public https:// address, e.g. https://firstjob.example.com
+      - key: APP_URL
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: AI_MODEL
+        value: claude-sonnet-5-5
+      - key: JSEARCH_API_KEY
+        sync: false
+      - key: RESEND_API_KEY
+        sync: false
+      - key: EMAIL_FROM
+        sync: false
+      # Stripe: start with TEST values. Switch to live values only after the
+      # live checklist in docs/DEPLOY.md, then set STRIPE_ALLOW_LIVE=true.
+      - key: STRIPE_SECRET_KEY
+        sync: false
+      - key: STRIPE_WEBHOOK_SECRET
+        sync: false
+      - key: STRIPE_PRICE_MONTHLY
+        sync: false
+      - key: STRIPE_PRICE_YEARLY
+        sync: false
+      - key: STRIPE_ALLOW_LIVE
+        value: "false"

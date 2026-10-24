@@ -22,7 +22,7 @@ const cookieFrom = (res) => String(res.headers['set-cookie'] || '').split(';')[0
 test('config: empty settings start fine with every optional feature off', () => {
   const r = checkConfig({});
   assert.deepEqual(r.errors, []);
-  assert.deepEqual(r.features, { ai: false, jobs: false, email: false });
+  assert.deepEqual(r.features, { ai: false, jobs: false, email: false, billing: false });
   assert.ok(r.warnings.some((w) => w.includes('ANTHROPIC_API_KEY')));
   assert.ok(r.warnings.some((w) => w.includes('JSEARCH_API_KEY')));
 });

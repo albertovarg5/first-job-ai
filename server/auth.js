@@ -18,6 +18,7 @@ import {
   HttpError,
   RateLimiter,
   clientIp,
+  proxySettings,
   envFlag,
   isProduction,
   parseCookies,
@@ -89,10 +90,12 @@ async function sendResetEmail(env, to, link) {
   }
 }
 
-export function createAuth({ db, env = {}, log = console }) {
+// beforeDeleteUser(userId) runs before an account is deleted and may throw to stop it
+// (used to cancel a paid subscription first).
+export function createAuth({ db, env = {}, log = console, beforeDeleteUser }) {
   const production = isProduction(env);
   const secureCookie = envFlag(env.COOKIE_SECURE, production);
-  const trustProxy = envFlag(env.TRUST_PROXY, false);
+  const trustProxy = proxySettings(env);
   const emailConfigured = Boolean(String(env.RESEND_API_KEY || '').trim() && String(env.EMAIL_FROM || '').trim());
   const appUrl = (env.APP_URL || '').replace(/\/$/, '');
   // In development without email, reset links are printed to the server terminal.
@@ -291,6 +294,7 @@ export function createAuth({ db, env = {}, log = console }) {
       if (!(await verifyPassword(String(body.password || '').slice(0, 200), row.password_hash))) {
         throw new HttpError(400, 'Your password is incorrect.', 'invalid_credentials');
       }
+      await beforeDeleteUser?.(user.id);
       q.deleteUser.run(user.id); // Sessions, resets and saved data are deleted with it.
       clearCookie(res);
       return send(res, 200, { ok: true });

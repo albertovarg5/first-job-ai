@@ -1,17 +1,16 @@
 // Subscription plans and the monthly AI allowance that comes with each one.
 //
-// There are no payments yet. Every account is on "free". When billing is
-// added (for example Stripe Checkout + a webhook), the webhook only needs to
-// set users.plan to "premium" or back to "free"; everything else here
-// already reads the plan from the database.
+// A user's plan comes only from their Stripe subscription as stored by the
+// verified webhook (see server/billingStore.js, planOf). Accounts without an
+// active subscription are on "free".
 //
 // Limits can be changed without code changes:
-//   AI_FREE_MONTHLY_LIMIT     (default 30)
-//   AI_PREMIUM_MONTHLY_LIMIT  (default 300)
+//   AI_FREE_MONTHLY_LIMIT     (default 20)
+//   AI_PREMIUM_MONTHLY_LIMIT  (default 200)
 
 export const PLANS = {
-  free: { id: 'free', label: 'Free', aiMonthly: 30 },
-  premium: { id: 'premium', label: 'Premium', aiMonthly: 300 },
+  free: { id: 'free', label: 'Free', aiMonthly: 20 },
+  premium: { id: 'premium', label: 'Premium', aiMonthly: 200 },
 };
 
 function limitFrom(value, fallback) {
@@ -36,10 +35,9 @@ export function nextResetDate(now = new Date()) {
 // Counts AI requests per signed-in user and month. A request reserves one
 // unit before it runs and is refunded if it fails, so users are only charged
 // against their allowance for answers they actually received.
-export function createAiQuota(db, env = {}, { now = () => new Date() } = {}) {
+export function createAiQuota(db, env = {}, { now = () => new Date(), planOf } = {}) {
   const limits = planLimits(env);
   const q = {
-    plan: db.prepare('SELECT plan FROM users WHERE id = ?'),
     ensure: db.prepare('INSERT INTO ai_usage (user_id, period, count) VALUES (?, ?, 0) ON CONFLICT(user_id, period) DO NOTHING'),
     take: db.prepare('UPDATE ai_usage SET count = count + 1 WHERE user_id = ? AND period = ? AND count < ?'),
     refund: db.prepare('UPDATE ai_usage SET count = count - 1 WHERE user_id = ? AND period = ? AND count > 0'),
@@ -47,8 +45,8 @@ export function createAiQuota(db, env = {}, { now = () => new Date() } = {}) {
   };
 
   function usage(userId) {
-    const stored = q.plan.get(userId)?.plan;
-    const plan = PLANS[stored] ? stored : 'free';
+    const current = planOf?.(userId, now());
+    const plan = PLANS[current] ? current : 'free';
     const period = currentPeriod(now());
     return {
       plan,
@@ -75,6 +73,8 @@ export function createAiQuota(db, env = {}, { now = () => new Date() } = {}) {
   return { usage, reserve, refund };
 }
 
-export function limitReachedMessage(u) {
-  return `You’ve used all ${u.limit} AI requests included in the ${u.planLabel} plan this month. They reset on ${u.resetsOn}. The Basic-mode tools still work in the meantime.`;
+// upgrade: true only when Premium can really be bought on this server.
+export function limitReachedMessage(u, { upgrade = false, premiumLimit } = {}) {
+  const base = `You’ve used all ${u.limit} AI requests included in the ${u.planLabel} plan this month. They reset on ${u.resetsOn}. The Basic-mode tools still work in the meantime.`;
+  return upgrade && u.plan === 'free' ? `${base} Premium includes ${premiumLimit} AI requests a month (Settings → Plan).` : base;
 }

@@ -734,3 +734,43 @@ a.sync-pill:hover { background: var(--surface-2); color: var(--ink-2); }
   .ws-head-actions > * { flex: 1 1 auto; }
   .ws-next-body .btn { width: 100%; justify-content: center; }
 }
+
+/* ==========================================================================
+   Plan and billing
+   ========================================================================== */
+.plan-upgrade { align-items: flex-start; }
+#plan .data-row > .progress { width: 180px; flex-shrink: 0; }
+.plan-buttons { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+.plan-test { margin-top: 8px; }
+.pricing { max-width: 880px; display: flex; flex-direction: column; gap: 16px; }
+.pricing-toggle { display: flex; justify-content: center; }
+.pricing-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: stretch; }
+.pricing-card { padding: 24px; display: flex; flex-direction: column; gap: 12px; }
+.pricing-card h2 { font-size: 18px; }
+.pricing-premium { border-color: var(--accent-line); box-shadow: var(--shadow-md); }
+.pricing-price { min-height: 40px; display: flex; align-items: center; }
+.pricing-amount { font-size: 30px; font-weight: 700; letter-spacing: -0.02em; }
+.pricing-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; font-size: 14px; }
+.pricing-list li { display: flex; gap: 8px; align-items: flex-start; }
+.pricing-list .icon { color: var(--accent); flex-shrink: 0; margin-top: 2px; }
+.pricing-cta { margin-top: auto; display: flex; flex-direction: column; align-items: flex-start; gap: 8px; padding-top: 8px; }
+.pricing-foot { display: flex; gap: 6px; align-items: flex-start; }
+.upgrade-banner { display: flex; align-items: center; gap: 14px; padding: 16px 20px; border-color: var(--accent-line); }
+.upgrade-banner > div { flex: 1; }
+.upgrade-banner .summary-icon { width: 36px; height: 36px; flex-shrink: 0; }
+.billing-result { max-width: 560px; margin: 40px auto; padding: 40px 28px; text-align: center; display: flex; flex-direction: column; align-items: center; gap: 12px; }
+.billing-result h1 { font-size: 24px; }
+.billing-result p { max-width: 46ch; }
+.billing-result > .icon { color: var(--ink-3); }
+@media (max-width: 640px) {
+  .plan-buttons { justify-content: stretch; width: 100%; }
+  .pricing-grid { grid-template-columns: 1fr; }
+  .pricing-cta { align-items: stretch; }
+  .pricing-cta .btn { justify-content: center; }
+  .upgrade-banner { flex-wrap: wrap; }
+  .upgrade-banner .btn { flex: 1 1 100%; justify-content: center; }
+  #plan .data-row { flex-wrap: wrap; }
+  #plan .data-row > .progress { width: 100%; }
+  .plan-buttons .btn { flex: 1 1 100%; justify-content: center; }
+  .billing-result { margin: 16px auto; padding: 28px 18px; }
+}
