@@ -60,7 +60,13 @@ const SECURITY_HEADERS = {
 };
 
 async function serveStatic(req, res) {
-  const urlPath = decodeURIComponent((req.url || '/').split('?')[0]);
+  let urlPath;
+  try {
+    urlPath = decodeURIComponent((req.url || '/').split('?')[0]);
+  } catch {
+    res.statusCode = 400;
+    return res.end('Bad request');
+  }
   const target = normalize(join(distDir, urlPath));
   // Block path traversal outside dist/.
   const inside = target === distDir || target.startsWith(distDir + sep);

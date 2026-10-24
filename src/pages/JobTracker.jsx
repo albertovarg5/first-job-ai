@@ -7,7 +7,7 @@ import { EmptyState, PageHeader, Segmented } from '../components/ui.jsx';
 import { useAppData } from '../context/AppDataContext.jsx';
 import { useToast } from '../context/ToastContext.jsx';
 import { STATUSES, countByStatus, filterApplications, statusLabel } from '../lib/applications.js';
-import { formatDate, formatDateTime, toDateKey } from '../lib/utils.js';
+import { formatDate, formatDateTime, isValidUrl, toDateKey } from '../lib/utils.js';
 
 function StatusSelect({ app, onChange }) {
   return (
@@ -232,8 +232,8 @@ export default function JobTracker() {
                     {a.interviewDate ? formatDateTime(a.interviewDate) : <span className="subtle">—</span>}
                   </span>
                   <span role="cell" className="app-actions">
-                    {a.link && (
-                      <a className="icon-btn" href={a.link} target="_blank" rel="noreferrer" aria-label={`Open job posting for ${a.title}`}>
+                    {a.link && isValidUrl(a.link) && (
+                      <a className="icon-btn" href={a.link} target="_blank" rel="noopener noreferrer" aria-label={`Open job posting for ${a.title}`}>
                         <Icon name="external" size={16} />
                       </a>
                     )}
