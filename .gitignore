@@ -4,6 +4,12 @@ node_modules/
 # Build output
 dist/
 
+# Local database (accounts and saved data)
+data/
+*.db
+*.db-shm
+*.db-wal
+
 # Secrets — never commit your API key
 .env
 .env.local

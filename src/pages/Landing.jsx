@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import Icon from '../components/Icon.jsx';
 import { Logo } from '../components/AppLayout.jsx';
 import { useAppData } from '../context/AppDataContext.jsx';
+import { useAuth } from '../context/AuthContext.jsx';
 import { translateExperience } from '../lib/translator.js';
 
 const EXAMPLES = [
@@ -15,10 +16,12 @@ const EXAMPLES = [
 const FEATURES = [
   { icon: 'translator', title: 'Experience Translator', text: 'Turn class projects, volunteering and part-time work into resume language — without inflating anything.' },
   { icon: 'resume', title: 'Resume Builder', text: 'Fill in guided sections, see a live preview, compare against a job post, and download a clean PDF.' },
+  { icon: 'search', title: 'Real job search', text: 'Search current listings, save the ones you like and add them to your tracker in one click.' },
   { icon: 'tracker', title: 'Job Tracker', text: 'Keep every application, link, note and interview date in one list or board.' },
+  { icon: 'letter', title: 'Cover letters', text: 'Draft a letter for a specific job using only the experience on your resume.' },
   { icon: 'interview', title: 'Interview Practice', text: 'Answer real interview questions for your target role and get structured feedback.' },
   { icon: 'missions', title: 'Career Missions', text: 'Three small tasks a day so your search keeps moving, even on busy weeks.' },
-  { icon: 'dashboard', title: 'Your dashboard', text: 'See your resume progress, upcoming interviews and next steps at a glance.' },
+  { icon: 'compass', title: 'Career Assistant', text: 'See which jobs overlap with your resume and the transferable skills your experience already shows.' },
 ];
 
 const STEPS = [
@@ -69,7 +72,8 @@ function LiveDemo() {
 }
 
 export default function Landing() {
-  const { data } = useAppData();
+  const { data, mode } = useAppData();
+  const { serverAvailable } = useAuth();
   const hasProfile = Boolean(data.profile);
   const ctaTo = hasProfile ? '/dashboard' : '/onboarding';
   const ctaLabel = hasProfile ? 'Open your dashboard' : 'Get started — it’s free';
@@ -83,9 +87,16 @@ export default function Landing() {
           <a href="#how">How it works</a>
           <a href="#honest">Our approach</a>
         </nav>
-        <Link to={ctaTo} className="btn btn-primary btn-sm">
-          {hasProfile ? 'Open app' : 'Get started'}
-        </Link>
+        <div className="landing-nav-actions">
+          {mode === 'guest' && serverAvailable && (
+            <Link to="/signin" className="btn btn-ghost btn-sm">
+              Sign in
+            </Link>
+          )}
+          <Link to={ctaTo} className="btn btn-primary btn-sm">
+            {hasProfile ? 'Open app' : 'Get started'}
+          </Link>
+        </div>
       </header>
 
       <section className="hero">
@@ -103,7 +114,7 @@ export default function Landing() {
               See what’s inside
             </a>
           </div>
-          <p className="hero-fine">No account needed. Your data stays in this browser.</p>
+          <p className="hero-fine">No account needed — start as a guest and your data stays in this browser. Create a free account anytime to use it on any device.</p>
         </div>
         <LiveDemo />
       </section>
@@ -111,7 +122,7 @@ export default function Landing() {
       <section id="features" className="landing-section">
         <div className="section-head">
           <h2>Everything for your first job search, in one place</h2>
-          <p className="muted">Six tools that work together, built around what entry-level candidates actually struggle with.</p>
+          <p className="muted">Tools that work together, built around what entry-level candidates actually struggle with.</p>
         </div>
         <div className="feature-list">
           {FEATURES.map((f) => (
@@ -154,7 +165,7 @@ export default function Landing() {
               <strong>Clear about AI.</strong> When an AI model is connected, results are labeled. Without one, the app runs in Basic mode and says so.
             </p>
             <p>
-              <strong>Private by default.</strong> Everything is saved in your browser’s local storage. Nothing is uploaded unless you turn on AI.
+              <strong>Private by default.</strong> As a guest, everything stays in your browser. With an account, your data is stored on the app’s server and only you can see it. Text is only sent to an AI provider when you use an AI feature.
             </p>
           </div>
         </div>

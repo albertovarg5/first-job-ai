@@ -1,12 +1,14 @@
 import { useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import Icon from '../components/Icon.jsx';
-import { ConfirmDialog } from '../components/Modal.jsx';
+import { ConfirmDialog, Modal } from '../components/Modal.jsx';
 import { Field, PageHeader, Spinner } from '../components/ui.jsx';
 import { useAppData } from '../context/AppDataContext.jsx';
 import { useToast } from '../context/ToastContext.jsx';
+import { useAuth } from '../context/AuthContext.jsx';
+import { loadData } from '../lib/storage.js';
 import { EXPERIENCE_LEVELS, GOALS, SITUATIONS } from '../lib/profileOptions.js';
-import { isValidEmail, toDateKey } from '../lib/utils.js';
+import { formatDate, isValidEmail, toDateKey } from '../lib/utils.js';
 
 function ProfileForm() {
   const { data, actions } = useAppData();
@@ -101,7 +103,7 @@ function ProfileForm() {
 }
 
 function AiSettings() {
-  const { data, actions, aiStatus, refreshAiStatus } = useAppData();
+  const { data, actions, aiStatus, aiLocked, refreshAiStatus } = useAppData();
   const toast = useToast();
   const [checking, setChecking] = useState(false);
 
@@ -136,7 +138,7 @@ function AiSettings() {
         ) : aiStatus.connected ? (
           <>
             <p className="muted small">
-              Connected to <strong>{aiStatus.model}</strong> through your local server. Your API key stays in the <code>.env</code> file on your computer.
+              Connected to <strong>{aiStatus.model}</strong> through the app’s server. The API key stays on the server and is never sent to your browser.
             </p>
             <label className="checkbox">
               <input
@@ -147,9 +149,17 @@ function AiSettings() {
                   toast.success(e.target.checked ? 'AI turned on.' : 'AI turned off. Using Basic mode.');
                 }}
               />
-              Use AI for translations, interview feedback and resume suggestions
+              Use AI for translations, resume summaries, cover letters, interview questions and feedback, and skills analysis
             </label>
-            <p className="subtle">When AI is on, the text you submit to those features is sent to the AI provider to generate a response.</p>
+            <p className="subtle">
+              When AI is on, the text you submit to those features (for example your resume content and a job description) is sent to the AI provider, Anthropic, to
+              generate a response. Your name, email and phone number are left out.
+            </p>
+            {aiLocked && (
+              <div className="alert alert-warn">
+                <Icon name="lock" size={16} /> On this server, AI features are available after you <Link to="/signin">sign in</Link>.
+              </div>
+            )}
           </>
         ) : (
           <div className="setup-steps">
@@ -178,8 +188,205 @@ function AiSettings() {
   );
 }
 
+function AccountSettings() {
+  const auth = useAuth();
+  const { actions } = useAppData();
+  const toast = useToast();
+  const navigate = useNavigate();
+  const [pw, setPw] = useState({ current: '', next: '', confirm: '' });
+  const [pwErrors, setPwErrors] = useState({});
+  const [pwBusy, setPwBusy] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deletePw, setDeletePw] = useState('');
+  const [deleteError, setDeleteError] = useState('');
+  const [deleteBusy, setDeleteBusy] = useState(false);
+  const [confirmImport, setConfirmImport] = useState(false);
+  const [hasGuestData] = useState(() => Boolean(loadData().profile));
+
+  if (!auth.user) {
+    return (
+      <section className="panel">
+        <div className="panel-header">
+          <div>
+            <h2>Account</h2>
+            <p className="subtle">You’re using First Job AI as a guest. Your data is saved in this browser only.</p>
+          </div>
+          <span className="badge">Guest</span>
+        </div>
+        <div className="panel-body">
+          {auth.serverAvailable ? (
+            <div className="row-actions">
+              <Link to="/signup" className="btn btn-primary">
+                Create a free account
+              </Link>
+              <Link to="/signin" className="btn btn-secondary">
+                Sign in
+              </Link>
+            </div>
+          ) : (
+            <p className="muted small">Accounts need the First Job AI server, which isn’t reachable from this page.</p>
+          )}
+          <p className="subtle mt-8">
+            With an account, your data is saved on the server and you can sign in from any device. When you create one, you can copy this browser’s data into it.
+          </p>
+        </div>
+      </section>
+    );
+  }
+
+  const changePassword = async (e) => {
+    e.preventDefault();
+    const errs = {
+      current: pw.current ? null : 'Enter your current password.',
+      next: pw.next.length < 8 ? 'Use at least 8 characters.' : null,
+      confirm: pw.confirm !== pw.next ? 'The passwords don’t match.' : null,
+    };
+    setPwErrors(errs);
+    if (errs.current || errs.next || errs.confirm) return;
+    setPwBusy(true);
+    try {
+      await auth.changePassword(pw.current, pw.next);
+      setPw({ current: '', next: '', confirm: '' });
+      toast.success('Password changed. Other devices were signed out.');
+    } catch (err) {
+      setPwErrors(err.code === 'weak_password' ? { next: err.message } : { current: err.message });
+    } finally {
+      setPwBusy(false);
+    }
+  };
+
+  const signOut = async () => {
+    await auth.signOut();
+    toast.success('Signed out.');
+    navigate('/');
+  };
+
+  const deleteAccount = async () => {
+    if (!deletePw) {
+      setDeleteError('Enter your password to confirm.');
+      return;
+    }
+    setDeleteBusy(true);
+    try {
+      await auth.deleteAccount(deletePw);
+      toast.success('Your account and its data were deleted.');
+      navigate('/');
+    } catch (err) {
+      setDeleteError(err.message);
+      setDeleteBusy(false);
+    }
+  };
+
+  return (
+    <section className="panel">
+      <div className="panel-header">
+        <div>
+          <h2>Account</h2>
+          <p className="subtle">
+            Signed in as <strong>{auth.user.email}</strong>
+            {auth.user.createdAt ? ` · member since ${formatDate(auth.user.createdAt)}` : ''}. Your data is saved to your account.
+          </p>
+        </div>
+        <button className="btn btn-secondary btn-sm" onClick={signOut}>
+          <Icon name="logout" size={14} /> Sign out
+        </button>
+      </div>
+      <div className="panel-body data-actions">
+        <form className="data-row account-password" onSubmit={changePassword} noValidate>
+          <div>
+            <strong>Change password</strong>
+            <p className="subtle">Signs you out on your other devices.</p>
+          </div>
+          <div className="form-stack account-password-fields">
+            <Field label="Current password" id="ac-current" error={pwErrors.current}>
+              <input id="ac-current" type="password" className="input" autoComplete="current-password" maxLength={200} value={pw.current} onChange={(e) => setPw({ ...pw, current: e.target.value })} />
+            </Field>
+            <Field label="New password" id="ac-new" error={pwErrors.next}>
+              <input id="ac-new" type="password" className="input" autoComplete="new-password" maxLength={200} value={pw.next} onChange={(e) => setPw({ ...pw, next: e.target.value })} />
+            </Field>
+            <Field label="Confirm new password" id="ac-confirm" error={pwErrors.confirm}>
+              <input id="ac-confirm" type="password" className="input" autoComplete="new-password" maxLength={200} value={pw.confirm} onChange={(e) => setPw({ ...pw, confirm: e.target.value })} />
+            </Field>
+            <div>
+              <button type="submit" className="btn btn-secondary" disabled={pwBusy}>
+                {pwBusy && <Spinner />} Change password
+              </button>
+            </div>
+          </div>
+        </form>
+        {hasGuestData && (
+          <div className="data-row">
+            <div>
+              <strong>Copy guest data from this browser</strong>
+              <p className="subtle">Replaces your account’s data with what you saved here before signing in.</p>
+            </div>
+            <button className="btn btn-secondary" onClick={() => setConfirmImport(true)}>
+              <Icon name="upload" size={15} /> Copy into account
+            </button>
+          </div>
+        )}
+        <div className="data-row danger-zone">
+          <div>
+            <strong>Delete account</strong>
+            <p className="subtle">Permanently deletes your account and everything saved in it. Guest data in this browser is not affected.</p>
+          </div>
+          <button className="btn btn-danger-ghost" onClick={() => setDeleteOpen(true)}>
+            <Icon name="trash" size={15} /> Delete account
+          </button>
+        </div>
+      </div>
+      <ConfirmDialog
+        open={confirmImport}
+        title="Replace your account’s data?"
+        message="Your account’s current profile, resume, applications and other data will be replaced by the guest data saved in this browser."
+        confirmLabel="Replace"
+        onCancel={() => setConfirmImport(false)}
+        onConfirm={() => {
+          actions.importGuestData();
+          setConfirmImport(false);
+          toast.success('Guest data copied into your account.');
+        }}
+      />
+      <Modal
+        open={deleteOpen}
+        title="Delete your account?"
+        size="sm"
+        onClose={() => setDeleteOpen(false)}
+        footer={
+          <>
+            <button className="btn btn-ghost" onClick={() => setDeleteOpen(false)}>
+              Cancel
+            </button>
+            <button className="btn btn-danger" onClick={deleteAccount} disabled={deleteBusy}>
+              {deleteBusy && <Spinner />} Delete account
+            </button>
+          </>
+        }
+      >
+        <div className="form-stack">
+          <p className="muted">This permanently deletes your account, resume, applications, saved jobs, cover letters and practice history. It can’t be undone.</p>
+          <Field label="Enter your password to confirm" id="ac-delete" error={deleteError}>
+            <input
+              id="ac-delete"
+              type="password"
+              className="input"
+              autoComplete="current-password"
+              value={deletePw}
+              onChange={(e) => {
+                setDeletePw(e.target.value);
+                setDeleteError('');
+              }}
+            />
+          </Field>
+        </div>
+      </Modal>
+    </section>
+  );
+}
+
 function DataSettings() {
-  const { data, actions } = useAppData();
+  const { data, actions, mode } = useAppData();
+  const inAccount = mode === 'account';
   const toast = useToast();
   const navigate = useNavigate();
   const fileRef = useRef(null);
@@ -219,7 +426,11 @@ function DataSettings() {
       <div className="panel-header">
         <div>
           <h2>Your data</h2>
-          <p className="subtle">Everything is stored in this browser only. Back it up before clearing your browser data or switching computers.</p>
+          <p className="subtle">
+            {inAccount
+              ? 'Your data is saved to your account. You can still download a copy for your records.'
+              : 'As a guest, everything is stored in this browser only. Back it up before clearing your browser data or switching computers.'}
+          </p>
         </div>
       </div>
       <div className="panel-body data-actions">
@@ -235,7 +446,7 @@ function DataSettings() {
         <div className="data-row">
           <div>
             <strong>Restore from a backup</strong>
-            <p className="subtle">Replaces the data currently in this browser.</p>
+            <p className="subtle">{inAccount ? 'Replaces the data in your account.' : 'Replaces the data currently in this browser.'}</p>
           </div>
           <button className="btn btn-secondary" onClick={() => fileRef.current?.click()}>
             <Icon name="upload" size={15} /> Restore backup
@@ -245,7 +456,10 @@ function DataSettings() {
         <div className="data-row danger-zone">
           <div>
             <strong>Delete all data</strong>
-            <p className="subtle">Erases everything and returns to the start. This can’t be undone.</p>
+            <p className="subtle">
+              {inAccount ? 'Erases everything saved in your account but keeps the account itself.' : 'Erases everything and returns to the start.'} This can’t be
+              undone.
+            </p>
           </div>
           <button className="btn btn-danger-ghost" onClick={() => setConfirmReset(true)}>
             <Icon name="trash" size={15} /> Delete all data
@@ -255,7 +469,7 @@ function DataSettings() {
       <ConfirmDialog
         open={confirmReset}
         title="Delete all of your data?"
-        message="Your profile, resume, applications, practice sessions, translations and mission history will be permanently erased from this browser."
+        message={`Your profile, resume, applications, saved jobs, cover letters, practice sessions, translations and mission history will be permanently erased from ${inAccount ? 'your account' : 'this browser'}.`}
         confirmLabel="Delete everything"
         onCancel={() => setConfirmReset(false)}
         onConfirm={() => {
@@ -280,6 +494,7 @@ export default function Settings() {
         </div>
       )}
       <div className="settings-stack">
+        <AccountSettings />
         <ProfileForm key={data.profile?.createdAt || 'profile'} />
         <AiSettings />
         <DataSettings />

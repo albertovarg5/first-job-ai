@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
+import { useAuth } from '../context/AuthContext.jsx';
 import Icon from '../components/Icon.jsx';
 import JobCard from '../components/jobs/JobCard.jsx';
 import { ConfirmDialog } from '../components/Modal.jsx';
@@ -191,6 +192,12 @@ function ResultsError({ error, onRetry }) {
         }
       >
         {error.message}
+        {error.code === 'auth_required' && (
+          <>
+            {' '}
+            <Link to="/signin">Sign in</Link>
+          </>
+        )}
       </EmptyState>
     </div>
   );
@@ -242,6 +249,8 @@ function SavedJobs() {
 
 export default function JobSearch() {
   const { data } = useAppData();
+  const auth = useAuth();
+  const locked = auth.requireAuthForApis && !auth.user;
   const [params, setParams] = useSearchParams();
   const tab = params.get('tab') === 'saved' ? 'saved' : 'search';
   const [status, setStatus] = useState(null);
@@ -320,6 +329,20 @@ export default function JobSearch() {
         </div>
       ) : !configured ? (
         <SetupNotice status={status} />
+      ) : locked ? (
+        <div className="panel">
+          <EmptyState
+            icon="lock"
+            title="Sign in to search jobs"
+            action={
+              <Link to="/signin" className="btn btn-primary" state={{ from: '/jobs' }}>
+                Sign in
+              </Link>
+            }
+          >
+            Job search uses a paid API, so on this site it’s available to signed-in users. Accounts are free.
+          </EmptyState>
+        </div>
       ) : (
         <>
           <SearchForm initial={search || emptySearch(data.profile)} onSearch={run} busy={loading} defaultCountry={status.country} />

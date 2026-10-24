@@ -13,12 +13,17 @@ import ExperienceTranslator from './pages/ExperienceTranslator.jsx';
 import CareerMissions from './pages/CareerMissions.jsx';
 import Settings from './pages/Settings.jsx';
 import NotFound from './pages/NotFound.jsx';
+import { ForgotPassword, ResetPassword, SignIn, SignUp } from './pages/Auth.jsx';
 
 export default function App() {
   return (
     <Routes>
       <Route path="/" element={<Landing />} />
       <Route path="/onboarding" element={<Onboarding />} />
+      <Route path="/signin" element={<SignIn />} />
+      <Route path="/signup" element={<SignUp />} />
+      <Route path="/forgot-password" element={<ForgotPassword />} />
+      <Route path="/reset-password" element={<ResetPassword />} />
       <Route element={<AppLayout />}>
         <Route path="/dashboard" element={<Dashboard />} />
         <Route path="/resume" element={<ResumeBuilder />} />

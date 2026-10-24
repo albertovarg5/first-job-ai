@@ -2,8 +2,11 @@
 // `npm run preview`) and by server/index.js (production).
 
 import { createAiHandler } from './aiHandler.js';
+import { createAuth } from './auth.js';
+import { createDataHandler } from './dataHandler.js';
+import { dbUsageStore, openDatabase } from './db.js';
 import { createJobsHandler } from './jobsHandler.js';
-import { RateLimiter, clientIp, envFlag, pathOf, rateLimited, send } from './http.js';
+import { RateLimiter, clientIp, envFlag, isProduction, pathOf, rateLimited, send } from './http.js';
 
 // State-changing requests must be JSON and, when the browser says where they
 // came from, come from this site. Together with SameSite cookies this blocks
@@ -21,32 +24,69 @@ export function sameOriginJson(req) {
   }
 }
 
-export function createApi(env = {}) {
+async function build(env, options) {
+  const db = options.db || (await openDatabase(env.DATABASE_PATH || 'data/first-job-ai.db'));
   const trustProxy = envFlag(env.TRUST_PROXY, false);
+  // AI and job search use paid API keys, so on a public server only
+  // signed-in users may call them (set API_REQUIRE_AUTH=false to allow guests).
+  const requireAuthForApis = envFlag(env.API_REQUIRE_AUTH, isProduction(env));
+  const auth = createAuth({ db, env, log: options.log || console });
   const ai = createAiHandler(env);
-  const jobs = createJobsHandler(env);
+  const jobs = createJobsHandler(env, { usage: dbUsageStore(db) });
+  const data = createDataHandler({ db, requireUser: auth.requireUser });
   const aiLimiter = new RateLimiter({ limit: 40, windowMs: 10 * 60 * 1000 });
   const jobsLimiter = new RateLimiter({ limit: 30, windowMs: 10 * 60 * 1000 });
 
-  const mounts = [
-    ['/ai', ai, aiLimiter, (req) => req.method === 'POST'],
-    ['/jobs', jobs, jobsLimiter, (req) => pathOf(req) === '/search'],
-  ];
+  const paid = (limiter, isCall) => (req, user) => {
+    if (!isCall(req)) return null;
+    if (requireAuthForApis && !user) return [401, { error: 'Sign in to use this feature.', code: 'auth_required' }];
+    const r = limiter.take(user ? `u:${user.id}` : `ip:${clientIp(req, trustProxy)}`);
+    return r.ok ? null : r;
+  };
+
+  return {
+    db,
+    requireAuthForApis,
+    mounts: [
+      ['/auth', auth.handler, null],
+      ['/data', data, null],
+      ['/ai', ai, paid(aiLimiter, (req) => req.method === 'POST')],
+      ['/jobs', jobs, paid(jobsLimiter, (req) => pathOf(req) === '/search')],
+    ],
+    getUser: auth.getUser,
+  };
+}
+
+export function createApi(env = {}, options = {}) {
+  let ready;
 
   // Connect-style middleware mounted at /api.
-  return async function api(req, res, next) {
+  async function api(req, res) {
     if (!sameOriginJson(req)) {
       return send(res, 403, { error: 'This request was blocked for security reasons.', code: 'forbidden' });
     }
+    let app;
+    try {
+      ready ??= build(env, options);
+      app = await ready;
+    } catch (err) {
+      ready = undefined;
+      (options.log || console).error?.('[api] Could not open the database:', err);
+      return send(res, 500, { error: 'The server could not open its database. Check DATABASE_PATH and the server logs.', code: 'db_unavailable' });
+    }
     const full = pathOf(req);
-    for (const [prefix, handler, limiter, limited] of mounts) {
+    if (full === '/config' && req.method === 'GET') {
+      return send(res, 200, { requireAuthForApis: app.requireAuthForApis });
+    }
+    for (const [prefix, handler, gate] of app.mounts) {
       if (full !== prefix && !full.startsWith(`${prefix}/`)) continue;
       const originalUrl = req.url;
       req.url = req.url.slice(prefix.length) || '/';
       try {
-        if (limited(req)) {
-          const r = limiter.take(clientIp(req, trustProxy));
-          if (!r.ok) return rateLimited(res, r.retryAfter);
+        if (gate) {
+          const blocked = gate(req, app.getUser(req));
+          if (Array.isArray(blocked)) return send(res, ...blocked);
+          if (blocked) return rateLimited(res, blocked.retryAfter);
         }
         return await handler(req, res, () => send(res, 404, { error: 'Not found' }));
       } finally {
@@ -54,5 +94,8 @@ export function createApi(env = {}) {
       }
     }
     return send(res, 404, { error: 'Not found' });
-  };
+  }
+
+  api.ready = () => (ready ??= build(env, options));
+  return api;
 }

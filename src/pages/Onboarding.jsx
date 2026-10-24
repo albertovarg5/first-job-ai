@@ -1,7 +1,8 @@
 import { useState } from 'react';
-import { Navigate, useNavigate } from 'react-router-dom';
+import { Link, Navigate, useNavigate } from 'react-router-dom';
+import { useAuth } from '../context/AuthContext.jsx';
 import Icon from '../components/Icon.jsx';
-import { Logo } from '../components/AppLayout.jsx';
+import { LoadingScreen, Logo } from '../components/AppLayout.jsx';
 import { Field } from '../components/ui.jsx';
 import { useAppData } from '../context/AppDataContext.jsx';
 import { useToast } from '../context/ToastContext.jsx';
@@ -11,7 +12,8 @@ import { isValidEmail } from '../lib/utils.js';
 const STEP_TITLES = ['About you', 'Your experience', 'Your goals'];
 
 export default function Onboarding() {
-  const { data, actions } = useAppData();
+  const { data, actions, dataReady, mode } = useAppData();
+  const { serverAvailable } = useAuth();
   const toast = useToast();
   const navigate = useNavigate();
   const [step, setStep] = useState(0);
@@ -26,6 +28,7 @@ export default function Onboarding() {
     goals: [],
   });
 
+  if (!dataReady) return <LoadingScreen />;
   if (data.profile) return <Navigate to="/dashboard" replace />;
 
   const set = (key, value) => {
@@ -73,6 +76,12 @@ export default function Onboarding() {
         <Logo />
         <span className="subtle">
           Step {step + 1} of 3
+          {mode === 'guest' && serverAvailable && (
+            <>
+              {' · '}
+              <Link to="/signin">Sign in</Link>
+            </>
+          )}
         </span>
       </header>
 

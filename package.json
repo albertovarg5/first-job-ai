@@ -5,13 +5,14 @@
   "description": "First Job AI helps students, new grads and career changers build a resume, track applications and practice interviews.",
   "type": "module",
   "engines": {
-    "node": ">=20.19.0"
+    "node": ">=22.13.0"
   },
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "start": "node --disable-warning=ExperimentalWarning server/index.js",
     "preview": "vite preview",
-    "test": "node --test"
+    "test": "node --disable-warning=ExperimentalWarning --test"
   },
   "dependencies": {
     "react": "^19.2.0",

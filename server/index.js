@@ -125,6 +125,13 @@ const server = createServer(async (req, res) => {
   }
 });
 
+try {
+  await api.ready(); // Open the database (and run migrations) before accepting traffic.
+} catch (err) {
+  console.error('Could not open the database:', err.message);
+  process.exit(1);
+}
+
 server.listen(port, () => {
   console.log(`First Job AI is running at http://localhost:${port}`);
 });

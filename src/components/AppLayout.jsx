@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react';
 import { NavLink, Navigate, Outlet, useLocation, Link } from 'react-router-dom';
 import Icon from './Icon.jsx';
 import { useAppData } from '../context/AppDataContext.jsx';
+import { useAuth } from '../context/AuthContext.jsx';
+import { Spinner } from './ui.jsx';
 import { toDateKey } from '../lib/utils.js';
 
 export const NAV_ITEMS = [
@@ -28,6 +30,83 @@ export function Logo({ to = '/' }) {
   );
 }
 
+function SyncStatus() {
+  const { mode, sync } = useAppData();
+  const auth = useAuth();
+  if (mode === 'account') {
+    const label = { saving: 'Saving…', saved: 'Saved to your account', error: 'Not saved', conflict: 'Not saved', loading: 'Loading…' }[sync.state] || 'Signed in';
+    return (
+      <span className={`sync-pill ${sync.state === 'error' || sync.state === 'conflict' ? 'sync-bad' : ''}`} title={auth.user.email}>
+        <Icon name={sync.state === 'error' || sync.state === 'conflict' ? 'alert' : 'check'} size={13} /> {label}
+      </span>
+    );
+  }
+  if (!auth.serverAvailable) return null;
+  return (
+    <Link to="/signup" className="sync-pill" title="Your data is saved in this browser only">
+      <Icon name="lock" size={13} /> Guest · Save to an account
+    </Link>
+  );
+}
+
+// Shown when saving to the account failed or another tab saved first.
+function SyncBanner() {
+  const { mode, sync, syncActions } = useAppData();
+  if (mode !== 'account') return null;
+  if (sync.state === 'conflict') {
+    return (
+      <div className="alert alert-warn sync-banner" role="alert">
+        <Icon name="alert" size={16} />
+        <span>Your data was changed in another tab or on another device, so your latest changes here weren’t saved.</span>
+        <span className="sync-banner-actions">
+          <button className="btn btn-secondary btn-sm" onClick={syncActions.loadLatest}>
+            Load the latest version
+          </button>
+          <button className="btn btn-ghost btn-sm" onClick={() => syncActions.keepMine(sync.serverRevision)}>
+            Keep this version
+          </button>
+        </span>
+      </div>
+    );
+  }
+  if (sync.state === 'error') {
+    return (
+      <div className="alert alert-error sync-banner" role="alert">
+        <Icon name="alert" size={16} />
+        <span>Your latest changes couldn’t be saved: {sync.message}</span>
+        <span className="sync-banner-actions">
+          <button className="btn btn-secondary btn-sm" onClick={syncActions.retry}>
+            Try again
+          </button>
+        </span>
+      </div>
+    );
+  }
+  return null;
+}
+
+export function LoadingScreen({ message = 'Loading your data…', error, onRetry }) {
+  return (
+    <div className="loading-screen" role="status">
+      <Logo />
+      {error ? (
+        <>
+          <p className="muted">{error}</p>
+          {onRetry && (
+            <button className="btn btn-primary" onClick={onRetry}>
+              Try again
+            </button>
+          )}
+        </>
+      ) : (
+        <p className="muted center-row">
+          <Spinner /> {message}
+        </p>
+      )}
+    </div>
+  );
+}
+
 function Sidebar({ open, onNavigate }) {
   const { data, aiActive, aiStatus } = useAppData();
   const todayDone = (data.missions.completed[toDateKey()] || []).length;
@@ -48,6 +127,7 @@ function Sidebar({ open, onNavigate }) {
         ))}
       </nav>
       <div className="sidebar-footer">
+        <SyncStatus />
         <Link to="/settings" className="ai-pill" onClick={onNavigate} title="AI status">
           <span className={`dot ${aiActive ? 'dot-on' : ''}`} />
           {!aiStatus.checked ? 'Checking AI…' : aiActive ? 'AI connected' : 'Basic mode'}
@@ -65,7 +145,7 @@ function Sidebar({ open, onNavigate }) {
 }
 
 export default function AppLayout() {
-  const { data } = useAppData();
+  const { data, dataReady, sync, syncActions } = useAppData();
   const [menuOpen, setMenuOpen] = useState(false);
   const location = useLocation();
 
@@ -74,6 +154,8 @@ export default function AppLayout() {
     window.scrollTo?.(0, 0);
   }, [location.pathname]);
 
+  if (sync.state === 'loadError') return <LoadingScreen error={`We couldn’t load your data: ${sync.message}`} onRetry={syncActions.loadLatest} />;
+  if (!dataReady) return <LoadingScreen />;
   if (!data.profile) return <Navigate to="/onboarding" replace />;
 
   const current = NAV_ITEMS.find((n) => location.pathname.startsWith(n.to));
@@ -94,6 +176,7 @@ export default function AppLayout() {
       {menuOpen && <div className="sidebar-scrim" onClick={() => setMenuOpen(false)} aria-hidden="true" />}
       <main id="main" className="main">
         <div className="main-inner">
+          <SyncBanner />
           <Outlet />
         </div>
       </main>
