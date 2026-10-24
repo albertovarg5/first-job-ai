@@ -38,6 +38,15 @@ const PATHS = {
   history: ['M3 12a9 9 0 1 0 3-6.7L3 8', 'M3 3v5h5', 'M12 8v4l3 2'],
   logo: ['M5 19V9.5L12 5l7 4.5V19', 'M9.5 19v-5.5h5V19'],
   play: ['M7 5l12 7-12 7z'],
+  bookmark: ['M6 4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v17l-6-4-6 4z'],
+  bookmarkFilled: ['M6 4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v17l-6-4-6 4z', 'M9 7h6', 'M9 10h6'],
+  briefcase: ['M3 8a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z', 'M8 6V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v1'],
+  pin: ['M12 21s-7-6.2-7-11.5A7 7 0 0 1 19 9.5C19 14.8 12 21 12 21z', 'M12 12a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5z'],
+  money: ['M3 7h18v10H3z', 'M12 14.5a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5z', 'M6 10v.01', 'M18 14v.01'],
+  letter: ['M3 6h18v12H3z', 'M3 7l9 6 9-6'],
+  compass: ['M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18z', 'M15.5 8.5l-2 5-5 2 2-5z'],
+  lock: ['M6 11h12v10H6z', 'M8 11V8a4 4 0 0 1 8 0v3'],
+  logout: ['M10 4H5v16h5', 'M15 8l4 4-4 4', 'M19 12H9'],
 };
 
 export default function Icon({ name, size = 18, strokeWidth = 1.75, className = '', title }) {

@@ -6,8 +6,9 @@ import { toDateKey } from '../lib/utils.js';
 
 export const NAV_ITEMS = [
   { to: '/dashboard', label: 'Dashboard', icon: 'dashboard' },
-  { to: '/resume', label: 'Resume Builder', icon: 'resume' },
+  { to: '/jobs', label: 'Job Search', icon: 'search' },
   { to: '/tracker', label: 'Job Tracker', icon: 'tracker' },
+  { to: '/resume', label: 'Resume Builder', icon: 'resume' },
   { to: '/interview', label: 'Interview Practice', icon: 'interview' },
   { to: '/translator', label: 'Experience Translator', icon: 'translator' },
   { to: '/missions', label: 'Career Missions', icon: 'missions' },

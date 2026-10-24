@@ -1,7 +1,8 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { loadData, saveData, defaultData, normalizeData } from '../lib/storage.js';
 import { createId, toDateKey } from '../lib/utils.js';
 import { fetchAiStatus } from '../lib/ai.js';
+import { addSavedJob, findApplicationForJob, jobToApplication, removeSavedJob } from '../lib/jobs.js';
 
 const AppDataContext = createContext(null);
 
@@ -9,6 +10,9 @@ const MAX_ACTIVITY = 60;
 
 export function AppDataProvider({ children }) {
   const [data, setData] = useState(loadData);
+  // Latest data for actions that must return a result synchronously.
+  const dataRef = useRef(data);
+  dataRef.current = data;
   const [saveError, setSaveError] = useState(false);
   const [aiStatus, setAiStatus] = useState({ checked: false, connected: false, model: null });
 
@@ -74,6 +78,42 @@ export function AppDataProvider({ children }) {
       },
       deleteApplication(id) {
         update((d) => ({ ...d, applications: d.applications.filter((a) => a.id !== id) }));
+      },
+
+      // Saved jobs from Job Search (one copy per listing).
+      saveJob(job) {
+        update((d) => ({ ...d, savedJobs: addSavedJob(d.savedJobs, job) }));
+      },
+      unsaveJob(jobId) {
+        update((d) => ({ ...d, savedJobs: removeSavedJob(d.savedJobs, jobId) }));
+      },
+      // Adds a search result to the tracker unless it's already there.
+      // Returns { record, created }.
+      trackJob(job) {
+        const existing = findApplicationForJob(dataRef.current.applications, job);
+        if (existing) return { record: existing, created: false };
+        const now = new Date().toISOString();
+        const record = { ...jobToApplication(job), id: createId('app'), createdAt: now, updatedAt: now };
+        dataRef.current = { ...dataRef.current, applications: [record, ...dataRef.current.applications] };
+        update((d) => (findApplicationForJob(d.applications, job) ? d : { ...d, applications: [record, ...d.applications] }));
+        return { record, created: true };
+      },
+
+      // Cover letters
+      saveCoverLetter(letter) {
+        const now = new Date().toISOString();
+        const record = { ...letter, id: letter.id || createId('cl'), createdAt: letter.createdAt || now, updatedAt: now };
+        update((d) => {
+          const exists = d.coverLetters.some((c) => c.id === record.id);
+          return {
+            ...d,
+            coverLetters: exists ? d.coverLetters.map((c) => (c.id === record.id ? record : c)) : [record, ...d.coverLetters],
+          };
+        });
+        return record;
+      },
+      deleteCoverLetter(id) {
+        update((d) => ({ ...d, coverLetters: d.coverLetters.filter((c) => c.id !== id) }));
       },
 
       // Interview practice

@@ -9,12 +9,19 @@ export function defaultData() {
     profile: null,
     resume: emptyResume(),
     applications: [],
+    savedJobs: [],
+    coverLetters: [],
     interviewSessions: [],
     translations: [],
     missions: { completed: {} },
     activity: [],
     settings: { aiEnabled: true },
   };
+}
+
+function dedupeById(list) {
+  const seen = new Set();
+  return list.filter((item) => !seen.has(item.id) && seen.add(item.id));
 }
 
 // Merge saved data over defaults so older or partial saves still load.
@@ -28,6 +35,8 @@ export function normalizeData(raw) {
     missions: { completed: { ...(raw.missions?.completed || {}) } },
     settings: { ...base.settings, ...(raw.settings || {}) },
     applications: Array.isArray(raw.applications) ? raw.applications : [],
+    savedJobs: dedupeById(Array.isArray(raw.savedJobs) ? raw.savedJobs.filter((s) => s && s.id && s.job) : []),
+    coverLetters: Array.isArray(raw.coverLetters) ? raw.coverLetters : [],
     interviewSessions: Array.isArray(raw.interviewSessions) ? raw.interviewSessions : [],
     translations: Array.isArray(raw.translations) ? raw.translations : [],
     activity: Array.isArray(raw.activity) ? raw.activity : [],
