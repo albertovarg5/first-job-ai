@@ -12,6 +12,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { extname, join, normalize, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createApi } from './api.js';
+import { reportConfig } from './config.js';
 
 const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const distDir = join(root, 'dist');
@@ -95,6 +96,12 @@ async function serveStatic(req, res) {
 
 if (!existsSync(join(distDir, 'index.html'))) {
   console.error('dist/ is missing. Run "npm run build" first.');
+  process.exit(1);
+}
+
+const config = reportConfig(process.env);
+if (config.errors.length) {
+  console.error('Fix the settings above, then start the app again.');
   process.exit(1);
 }
 

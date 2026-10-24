@@ -52,16 +52,15 @@ export function SetupNotice({ status }) {
     <section className="panel panel-pad setup-steps">
       <h2>Connect real job listings</h2>
       <p className="muted small">
-        Job search uses the <strong>JSearch API on RapidAPI</strong>, which collects public postings from job boards and company sites. It isn’t set up on
-        this server yet, so no listings are shown — the app never shows made-up jobs.
+        Job search uses the <strong>JSearch API by OpenWeb Ninja</strong>, which collects public postings from job boards and company sites. It isn’t set up
+        on this server yet, so no listings are shown — the app never shows made-up jobs.
       </p>
       <ol>
         <li>
-          Create a free account at <code>rapidapi.com</code>, open the <strong>JSearch</strong> API (by OpenWeb Ninja) and subscribe to a plan (the free
-          Basic plan works).
+          Create a free account at <code>app.openwebninja.com</code> and subscribe to the <strong>JSearch</strong> API (the free plan works).
         </li>
         <li>
-          Copy your <strong>X-RapidAPI-Key</strong> from the API’s Endpoints page.
+          Copy your <strong>API key</strong> from the OpenWeb Ninja dashboard. (A key from the JSearch API on <code>rapidapi.com</code> works too.)
         </li>
         <li>
           In the project folder, open <code>.env</code> (copy <code>.env.example</code> if you don’t have one) and set <code>JSEARCH_API_KEY=</code> to your key.
@@ -273,7 +272,7 @@ export default function JobSearch() {
     setMoreError('');
     try {
       const res = await searchJobs(s, 1);
-      const next = { jobs: res.jobs, page: res.page, hasMore: res.hasMore, at: new Date().toISOString() };
+      const next = { jobs: res.jobs, page: res.page, hasMore: res.hasMore, cursor: res.cursor || '', at: new Date().toISOString() };
       setResults(next);
       saveLastSearch({ search: s, results: next });
     } catch (err) {
@@ -289,9 +288,15 @@ export default function JobSearch() {
     setLoadingMore(true);
     setMoreError('');
     try {
-      const res = await searchJobs(search, results.page + 1);
+      const res = await searchJobs(search, results.page + 1, results.cursor);
       const ids = new Set(results.jobs.map((j) => j.id));
-      const next = { ...results, jobs: [...results.jobs, ...res.jobs.filter((j) => !ids.has(j.id))], page: res.page, hasMore: res.hasMore };
+      const next = {
+        ...results,
+        jobs: [...results.jobs, ...res.jobs.filter((j) => !ids.has(j.id))],
+        page: res.page,
+        hasMore: res.hasMore,
+        cursor: res.cursor || '',
+      };
       setResults(next);
       saveLastSearch({ search, results: next });
     } catch (err) {

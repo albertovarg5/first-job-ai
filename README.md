@@ -7,7 +7,7 @@ It searches real job listings, turns everyday experience (class projects, volunt
 - **Guest mode** works with no account: data is saved in your browser.
 - **Accounts** (optional) save your data on the server so you can sign in from any device.
 - **AI is optional.** Every feature works without it in a clearly labeled **Basic mode**. Connect an Anthropic API key to turn on AI.
-- **Real job search** uses the JSearch API on RapidAPI. Without a key, the app explains how to set it up — it never shows made-up jobs.
+- **Real job search** uses the JSearch API by OpenWeb Ninja (directly, or through RapidAPI). Without a key, the app explains how to set it up — it never shows made-up jobs.
 
 ---
 
@@ -73,15 +73,23 @@ The app opens at **<http://localhost:5173>**. Stop it with **Ctrl + C**.
 
 ## Configuration (`.env`)
 
-All settings are server-side. **Never** prefix them with `VITE_` (that would send them to the browser). `.env` is in `.gitignore`.
+All settings are server-side. **Never** prefix them with `VITE_` (that would send them to the browser — the server refuses to start and `npm run build` fails if a key is named `VITE_…`). `.env` is in `.gitignore`.
+
+Every API is **optional**: the app starts without any keys and each feature explains what's missing. At startup the server prints which integrations are on, and a warning for anything missing or malformed, for example:
+
+```
+[First Job AI] AI: on · Job search: on (OpenWeb Ninja) · Reset email: off
+[config] Password-reset email needs both RESEND_API_KEY and EMAIL_FROM; only RESEND_API_KEY is set, so email is off.
+```
 
 | Variable | Needed for | Notes |
 | --- | --- | --- |
-| `JSEARCH_API_KEY` | Job search | Your RapidAPI key for JSearch. |
+| `JSEARCH_API_KEY` | Job search | Your OpenWeb Ninja API key for JSearch (a RapidAPI JSearch key also works). |
+| `JSEARCH_PROVIDER` | Optional | `openwebninja` or `rapidapi`. Blank = detected from the key (RapidAPI keys contain `msh…jsn`). |
 | `JSEARCH_MONTHLY_LIMIT` | Optional | App stops searching after this many requests per month. Set it to your plan's allowance. |
 | `JSEARCH_COUNTRY` | Optional | Default search country (`us`, `ca`, `gb`, …). |
-| `ANTHROPIC_API_KEY` | AI features | From <https://console.anthropic.com>. |
-| `AI_MODEL` | Optional | Defaults to `claude-sonnet-5-5`. |
+| `ANTHROPIC_API_KEY` | AI features | From <https://console.anthropic.com> (starts with `sk-ant-`). |
+| `AI_MODEL` | Optional | Defaults to `claude-sonnet-5-5`. Set `claude-opus-5-5` for the most capable model (higher cost per request). |
 | `DATABASE_PATH` | Accounts | SQLite file. Default `data/first-job-ai.db`. Use a persistent disk in production. |
 | `APP_URL` | Password reset (production) | Public URL of the site, e.g. `https://firstjob.example.com`. |
 | `RESEND_API_KEY`, `EMAIL_FROM` | Password reset emails | From <https://resend.com>, with a verified sender domain. |
@@ -90,14 +98,16 @@ All settings are server-side. **Never** prefix them with `VITE_` (that would sen
 | `COOKIE_SECURE` | Optional | Defaults to `true` in production. Only set `false` to test the production build over plain `http://`. |
 | `API_REQUIRE_AUTH` | Optional | Defaults to `true` in production: only signed-in users can use AI/job search (protects your paid keys). |
 
-### Connect real job search (JSearch)
+### Connect real job search (JSearch by OpenWeb Ninja)
 
-1. Create an account at <https://rapidapi.com>, open the **JSearch** API (by OpenWeb Ninja) and subscribe to a plan (the free Basic plan works; note its monthly request allowance).
-2. Copy your **X-RapidAPI-Key** from the API's *Endpoints* page.
-3. In `.env`: `JSEARCH_API_KEY=your-key` and, optionally, `JSEARCH_MONTHLY_LIMIT=` your allowance.
-4. Restart `npm run dev`. Open **Job Search**.
+1. Create an account at <https://app.openwebninja.com> and subscribe to the **JSearch** API (the free plan works; note its monthly request allowance).
+2. Copy your **API key** from the OpenWeb Ninja dashboard.
+3. In `.env`: `JSEARCH_API_KEY=your-key` and, optionally, `JSEARCH_MONTHLY_LIMIT=` your allowance and `JSEARCH_COUNTRY=` your default country.
+4. Restart `npm run dev`. The terminal should say `Job search: on (OpenWeb Ninja)`. Open **Job Search**.
 
-To save requests, the server caches identical searches for 30 minutes and fetches one page (about 10 jobs) at a time. "Load more" fetches the next page. Invalid keys, plan limits, timeouts and outages each show a clear message.
+**Already have a RapidAPI key?** JSearch is also sold on <https://rapidapi.com> (search "JSearch", subscribe, copy the **X-RapidAPI-Key**). Put it in `JSEARCH_API_KEY`; the app recognizes RapidAPI keys and switches to RapidAPI automatically (or set `JSEARCH_PROVIDER=rapidapi`).
+
+How it works: the browser calls `/api/jobs/search` on this app; the server adds the key and calls `GET https://api.openwebninja.com/jsearch/search-v2` (header `x-api-key`) — or `https://jsearch.p.rapidapi.com/search` for RapidAPI keys. Results are converted into one format (title, employer, location, description, date posted, salary, apply link). To save requests, identical searches are cached for 30 minutes and one page (about 10 jobs) is fetched at a time; "Load more" fetches the next page. Invalid keys, plan limits, the monthly limit, timeouts and outages each show a clear message. Searches with no matches show "No jobs found" — sample jobs are never shown.
 
 ### Connect AI (Anthropic)
 
@@ -107,12 +117,21 @@ To save requests, the server caches identical searches for 30 minutes and fetche
 
 **What is sent to the AI provider:** only the text needed for the feature you use — for example your resume content (without your name, email or phone), a job description, an interview answer. Nothing is sent when AI is off, and you can turn it off in Settings.
 
-### Accounts and password reset
+### Accounts, saved jobs and password reset
 
-Accounts work out of the box with a local SQLite file (`data/first-job-ai.db`, ignored by Git).
+Accounts work out of the box with a local SQLite file (`data/first-job-ai.db`, ignored by Git). Nothing to install: it uses Node's built-in `node:sqlite`.
 
-- **Development:** "Forgot password" prints the reset link in the terminal running `npm run dev`.
-- **Production:** set `APP_URL`, `RESEND_API_KEY` and `EMAIL_FROM`. Without them, password reset is turned off and the page says so.
+When you're signed in, everything you save — profile, resume, **saved jobs**, **tracker entries and their statuses** (Interested → Applying → Applied → Interview → Offer / Rejected), cover letters, practice — is stored in your account in that database and comes back after a refresh, signing out and in, or a server restart. As a guest, the same data is kept in this browser only. **Save** on a job card keeps the listing; **Track** adds it to the Job Tracker as *Interested*, and the card then shows its current tracker status.
+
+**Password-reset email (Resend):**
+
+1. Create an account at <https://resend.com>, add and **verify your domain** (Domains → Add domain, then add the DNS records it shows).
+2. Create an API key (API Keys → Create, starts with `re_`).
+3. In `.env` (or your host's dashboard): `RESEND_API_KEY=re_...`, `EMAIL_FROM=First Job AI <no-reply@yourdomain.com>` (an address on the verified domain) and, in production, `APP_URL=https://your-site`.
+
+- **Development without Resend:** "Forgot password" prints the reset link in the terminal running `npm run dev`.
+- **Production without Resend:** password reset is turned off and the page says so.
+- If Resend refuses a message (for example, unverified domain), the user sees "We couldn't send the email" and the server log shows Resend's reason.
 
 ---
 
@@ -124,7 +143,7 @@ Accounts work out of the box with a local SQLite file (`data/first-job-ai.db`, i
 npm test
 ```
 
-62 tests cover: job search (validation, success, caching, empty results, duplicate listings, invalid/unsubscribed key, rate limit, upstream errors, network failure, timeout, monthly limit), saved-job dedupe and persistence, tracker duplicates and status history, accounts (hashing, sessions, sign-in errors, rate limiting, reset tokens, change password, delete account), **per-user data isolation**, CSRF blocking, save conflicts, data validation, migrations, honesty checks for cover letters/summaries/skills, job recommendations, AI route validation, plus the original translator, resume, PDF, missions and interview tests.
+78 tests cover: job search for both providers (OpenWeb Ninja `search-v2` with cursor paging and RapidAPI; provider detection, validation, success, caching, empty results, duplicate listings, missing fields, invalid/unsubscribed key, rate limit, upstream errors, network failure, timeout, monthly limit), settings validation (`VITE_` secrets, half-configured email, bad limits), Anthropic error handling (bad key, unknown model, rate limit, overloaded, no credit, refusal, cut-off answer), Resend email sending, saved jobs and tracker entries persisting per user in a real SQLite file across sign-out, sign-in and restart, job search sign-in rules, saved-job dedupe, tracker duplicates and status history, accounts (hashing, sessions, sign-in errors, rate limiting, reset tokens, change password, delete account), **per-user data isolation**, CSRF blocking, save conflicts, data validation, migrations, honesty checks for cover letters/summaries/skills, job recommendations, AI route validation, plus the original translator, resume, PDF, missions and interview tests.
 
 The tests never call the real JSearch or Anthropic APIs; those calls are simulated.
 
@@ -163,7 +182,8 @@ Example: **Render**
 - [ ] `NODE_ENV=production`, `APP_URL` (https) and `DATABASE_PATH` on a persistent disk are set.
 - [ ] HTTPS is on (cookies are `Secure` in production and won't work over plain http).
 - [ ] `TRUST_PROXY=true` if the host puts a proxy in front of the app.
-- [ ] `JSEARCH_MONTHLY_LIMIT` matches your RapidAPI plan.
+- [ ] `JSEARCH_MONTHLY_LIMIT` matches your JSearch plan.
+- [ ] The first lines of the server log say AI / Job search / Reset email are `on` as expected, with no `[config]` warnings you didn't expect.
 - [ ] Resend sender domain verified if you want password reset.
 - [ ] Back up the database file regularly (copy it while the app is stopped, or use your host's snapshots).
 
@@ -198,7 +218,8 @@ first-job-ai/
 │   ├── auth.js          Accounts, sessions, password reset
 │   ├── dataHandler.js   Per-user saved data with conflict detection
 │   ├── db.js            SQLite database and migrations
-│   ├── jobsHandler.js   JSearch (RapidAPI) job search
+│   ├── jobsHandler.js   JSearch job search (OpenWeb Ninja or RapidAPI)
+│   ├── config.js        Checks settings at startup and explains problems
 │   ├── aiHandler.js     Anthropic AI tasks
 │   └── http.js          Shared HTTP helpers and rate limiter
 ├── src/
@@ -233,11 +254,15 @@ first-job-ai/
 
 **Port 5173 is already in use** — Another copy is running. Close it, or use the address Vite prints.
 
-**Job Search says it isn't set up** — Check `JSEARCH_API_KEY` in `.env` (file named exactly `.env`, no quotes/spaces), then restart `npm run dev`.
+**Job Search says it isn't set up** — Check `JSEARCH_API_KEY` in `.env` (file named exactly `.env`, no quotes/spaces), then restart `npm run dev`. The terminal's first lines say which integrations are on.
 
-**"JSearch rejected the API key"** — The key is wrong or your RapidAPI account isn't subscribed to JSearch.
+**"JSearch (OpenWeb Ninja) rejected the API key"** — The key is wrong, or your account isn't subscribed to JSearch. If your key is from RapidAPI and the message says OpenWeb Ninja, set `JSEARCH_PROVIDER=rapidapi`.
 
 **Settings says AI "Not connected"** — Check `ANTHROPIC_API_KEY` and restart.
+
+**"The AI model … was not found"** — `AI_MODEL` has a typo. Leave it blank to use the default.
+
+**"Your Anthropic account is out of credit"** — Add credit at console.anthropic.com → Billing.
 
 **Signed in but changes say "Not saved"** — The server couldn't be reached or another tab saved first; use the banner's buttons.
 

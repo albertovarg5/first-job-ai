@@ -4,6 +4,7 @@ import Icon from '../Icon.jsx';
 import { Modal } from '../Modal.jsx';
 import { useAppData } from '../../context/AppDataContext.jsx';
 import { useToast } from '../../context/ToastContext.jsx';
+import { statusLabel } from '../../lib/applications.js';
 import { employmentTypeLabel, experienceNote, findApplicationForJob, formatSalary, jobLocation } from '../../lib/jobs.js';
 import { formatDate, timeAgo } from '../../lib/utils.js';
 
@@ -52,8 +53,8 @@ function JobActions({ job, onClose }) {
         <Icon name={saved ? 'bookmarkFilled' : 'bookmark'} size={15} /> {saved ? 'Saved' : 'Save'}
       </button>
       {tracked ? (
-        <Link to="/tracker" className="btn btn-sm btn-ghost" onClick={onClose}>
-          <Icon name="check" size={15} /> In tracker
+        <Link to="/tracker" className="btn btn-sm btn-ghost" onClick={onClose} title="Open the Job Tracker">
+          <Icon name="check" size={15} /> In tracker · {statusLabel(tracked.status)}
         </Link>
       ) : (
         <button className="btn btn-sm btn-ghost" onClick={track}>

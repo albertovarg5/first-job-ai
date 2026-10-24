@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildJSearchUrl, createJobsHandler, normalizeJob, parseSearchParams } from '../server/jobsHandler.js';
+import { buildJSearchUrl, createJobsHandler, normalizeJob, parseSearchParams, readJSearchBody, resolveProvider } from '../server/jobsHandler.js';
 import {
   addSavedJob,
   findApplicationForJob,
@@ -35,6 +35,12 @@ const RAW_JOB = {
 };
 
 const ok = (data) => jsonResponse({ status: 'OK', request_id: 'r1', data });
+// Fake keys in each provider's format (not real credentials).
+const RAPID_KEY = '0123456789msh0123456789abcdefp1a2b3cjsn0123456789ab';
+const OWN_KEY = 'own-test-key-123';
+// OpenWeb Ninja search-v2 response: { status, data: { jobs, cursor } }.
+const ownPage = (jobs, cursor) => ok({ jobs, cursor });
+const manyJobs = (prefix, n = 10) => Array.from({ length: n }, (_, i) => ({ ...RAW_JOB, job_id: `${prefix}${i}` }));
 
 test('search params: validation and normalization', () => {
   const p = parseSearchParams(new URLSearchParams('query=  marketing   intern &location=Austin&employmentTypes=intern,PARTTIME&remote=true'));
@@ -90,14 +96,14 @@ test('jobs route: successful search sends the key server-side and caches results
       return ok(Array.from({ length: 10 }, (_, i) => ({ ...RAW_JOB, job_id: `id${i}` })));
     },
     async () => {
-      const handler = createJobsHandler({ JSEARCH_API_KEY: 'rapid-secret' });
+      const handler = createJobsHandler({ JSEARCH_API_KEY: RAPID_KEY });
       const res = await call(handler, 'GET', '/search?query=marketing');
       assert.equal(res.status, 200);
       assert.equal(res.body.jobs.length, 10);
       assert.equal(res.body.hasMore, true);
       assert.equal(res.body.cached, false);
-      assert.equal(sentHeaders['X-RapidAPI-Key'], 'rapid-secret');
-      assert.ok(!JSON.stringify(res.body).includes('rapid-secret'));
+      assert.equal(sentHeaders['X-RapidAPI-Key'], RAPID_KEY);
+      assert.ok(!JSON.stringify(res.body).includes(RAPID_KEY));
       const again = await call(handler, 'GET', '/search?query=marketing');
       assert.equal(again.body.cached, true);
       assert.equal(calls, 1, 'the repeated search should come from the cache');
@@ -201,4 +207,103 @@ test('tracking a job links it to the listing and detects duplicates', () => {
   // Manually added entry with the same link and title also counts.
   assert.ok(findApplicationForJob([{ id: 'm', title: 'marketing intern', link: job.applyLink }], job));
   assert.equal(findApplicationForJob([], job), null);
+});
+
+test('provider: OpenWeb Ninja by default, RapidAPI for RapidAPI-style keys or when set', () => {
+  assert.equal(resolveProvider({ JSEARCH_API_KEY: OWN_KEY }), 'openwebninja');
+  assert.equal(resolveProvider({ JSEARCH_API_KEY: RAPID_KEY }), 'rapidapi');
+  assert.equal(resolveProvider({ JSEARCH_API_KEY: OWN_KEY, JSEARCH_PROVIDER: 'RapidAPI' }), 'rapidapi');
+  assert.equal(resolveProvider({ JSEARCH_API_KEY: RAPID_KEY, JSEARCH_PROVIDER: 'openwebninja' }), 'openwebninja');
+  assert.equal(resolveProvider({ RAPIDAPI_KEY: 'x' }), 'rapidapi');
+});
+
+test('OpenWeb Ninja URL uses search-v2 and a cursor instead of a page number', () => {
+  const p = parseSearchParams({ query: 'nurse', location: 'Ohio', page: '2', cursor: 'eyJwYWdlIjoyfQ==' });
+  const url = new URL(buildJSearchUrl(p, { provider: 'openwebninja' }));
+  assert.equal(url.origin + url.pathname, 'https://api.openwebninja.com/jsearch/search-v2');
+  assert.equal(url.searchParams.get('query'), 'nurse in Ohio');
+  assert.equal(url.searchParams.get('cursor'), 'eyJwYWdlIjoyfQ==');
+  assert.equal(url.searchParams.get('page'), null);
+  // The first page never sends a cursor; bad cursors are rejected.
+  assert.equal(parseSearchParams({ query: 'nurse', cursor: 'abc' }).cursor, '');
+  assert.throws(() => parseSearchParams({ query: 'nurse', page: '2', cursor: 'bad cursor!' }), /load more/);
+});
+
+test('OpenWeb Ninja search: x-api-key header, data.jobs, cursor paging, key never returned', async () => {
+  const urls = [];
+  const headers = [];
+  await withFetch(
+    async (url, opts) => {
+      urls.push(new URL(url));
+      headers.push(opts.headers);
+      return urls.length === 1 ? ownPage(manyJobs('p1-'), 'eyJwYWdlIjoyfQ==') : ownPage(manyJobs('p2-', 4), null);
+    },
+    async () => {
+      const handler = createJobsHandler({ JSEARCH_API_KEY: OWN_KEY, JSEARCH_COUNTRY: 'ca' });
+      const status = await call(handler, 'GET', '/status');
+      assert.equal(status.body.provider, 'OpenWeb Ninja');
+      assert.equal(status.body.country, 'ca');
+
+      const first = await call(handler, 'GET', '/search?query=barista&location=Toronto');
+      assert.equal(first.status, 200);
+      assert.equal(urls[0].host, 'api.openwebninja.com');
+      assert.equal(urls[0].pathname, '/jsearch/search-v2');
+      assert.equal(urls[0].searchParams.get('country'), 'ca', 'JSEARCH_COUNTRY is the default country');
+      assert.equal(headers[0]['x-api-key'], OWN_KEY);
+      assert.equal(headers[0]['X-RapidAPI-Key'], undefined);
+      assert.equal(first.body.jobs.length, 10);
+      assert.equal(first.body.hasMore, true);
+      assert.equal(first.body.cursor, 'eyJwYWdlIjoyfQ==');
+      assert.ok(!JSON.stringify(first.body).includes(OWN_KEY));
+
+      const second = await call(handler, 'GET', `/search?query=barista&location=Toronto&page=2&cursor=${encodeURIComponent(first.body.cursor)}`);
+      assert.equal(urls[1].searchParams.get('cursor'), 'eyJwYWdlIjoyfQ==');
+      assert.equal(second.body.jobs.length, 4);
+      assert.equal(second.body.hasMore, false, 'no cursor means no more pages');
+      assert.equal(second.body.cursor, null);
+    },
+  );
+});
+
+test('OpenWeb Ninja: empty results and a rejected key explain themselves', async () => {
+  await withFetch(
+    async () => ownPage([], null),
+    async () => {
+      const res = await call(createJobsHandler({ JSEARCH_API_KEY: OWN_KEY }), 'GET', '/search?query=zzzz');
+      assert.equal(res.status, 200);
+      assert.deepEqual(res.body.jobs, []);
+      assert.equal(res.body.hasMore, false);
+    },
+  );
+  await withFetch(
+    async () => jsonResponse({ message: 'Unauthorized' }, 401),
+    async () => {
+      const res = await call(createJobsHandler({ JSEARCH_API_KEY: OWN_KEY }), 'GET', '/search?query=developer');
+      assert.equal(res.body.code, 'invalid_key');
+      assert.match(res.body.error, /OpenWeb Ninja/);
+    },
+  );
+  assert.deepEqual(readJSearchBody({ data: { jobs: 'nope' } }), { rawJobs: [], cursor: null });
+  assert.deepEqual(readJSearchBody(null), { rawJobs: [], cursor: null });
+});
+
+test('normalizeJob fills gaps honestly: missing employer, location, date and apply link fallbacks', () => {
+  const job = normalizeJob({
+    job_id: 'x1',
+    job_title: 'Cashier',
+    apply_options: [{ publisher: 'Indeed', apply_link: 'javascript:void(0)' }, { publisher: 'Monster', apply_link: 'https://monster.example/apply' }],
+    job_salary_string: '$15–$18 an hour',
+  });
+  assert.equal(job.employer, 'Employer not listed');
+  assert.equal(job.location, '');
+  assert.equal(job.description, '');
+  assert.equal(job.postedAt, null);
+  assert.equal(job.applyLink, 'https://monster.example/apply', 'first safe apply option is used');
+  assert.deepEqual(job.salary, { text: '$15–$18 an hour' });
+  assert.equal(normalizeJob({ job_id: 'x2', job_title: 'Clerk' }).applyLink, '');
+});
+
+test('client: load more sends the cursor only after page 1', () => {
+  assert.equal(searchToParams({ query: 'nurse' }, 1, 'abc').get('cursor'), null);
+  assert.equal(searchToParams({ query: 'nurse' }, 2, 'abc').get('cursor'), 'abc');
 });

@@ -82,14 +82,18 @@ async function sendResetEmail(env, to, link) {
     }),
     signal: AbortSignal.timeout(15000),
   });
-  if (!res.ok) throw new Error(`Email provider returned status ${res.status}`);
+  if (!res.ok) {
+    // Resend explains problems such as an unverified sender domain in the body.
+    const detail = await res.json().then((b) => b?.message || b?.name || '', () => '');
+    throw new Error(`Resend returned status ${res.status}${detail ? `: ${detail}` : ''}`);
+  }
 }
 
 export function createAuth({ db, env = {}, log = console }) {
   const production = isProduction(env);
   const secureCookie = envFlag(env.COOKIE_SECURE, production);
   const trustProxy = envFlag(env.TRUST_PROXY, false);
-  const emailConfigured = Boolean(env.RESEND_API_KEY && env.EMAIL_FROM);
+  const emailConfigured = Boolean(String(env.RESEND_API_KEY || '').trim() && String(env.EMAIL_FROM || '').trim());
   const appUrl = (env.APP_URL || '').replace(/\/$/, '');
   // In development without email, reset links are printed to the server terminal.
   const devResetLinks = !production && !emailConfigured;

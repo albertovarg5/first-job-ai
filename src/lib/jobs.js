@@ -1,5 +1,5 @@
 // Job search helpers used by the Job Search page and Career Assistant.
-// Searches go to /api/jobs on our own server, which holds the RapidAPI key.
+// Searches go to /api/jobs on our own server, which holds the JSearch key.
 import { emptyApplication } from './applications.js';
 import { apiFetch } from './api.js';
 
@@ -55,7 +55,7 @@ export function validateSearch(s) {
   return errors;
 }
 
-export function searchToParams(s, page = 1) {
+export function searchToParams(s, page = 1, cursor = '') {
   const p = new URLSearchParams();
   p.set('query', String(s.query || '').trim());
   if (s.location?.trim()) p.set('location', s.location.trim());
@@ -65,11 +65,15 @@ export function searchToParams(s, page = 1) {
   if (s.datePosted && s.datePosted !== 'all') p.set('datePosted', s.datePosted);
   if (s.experience) p.set('experience', s.experience);
   p.set('page', String(page));
+  // OpenWeb Ninja pages with a cursor returned by the previous response.
+  if (page > 1 && cursor) p.set('cursor', cursor);
   return p;
 }
 
-export async function searchJobs(search, page = 1) {
-  return apiFetch(`/api/jobs/search?${searchToParams(search, page)}`, { networkError: 'Could not reach the app server. Make sure it is running.' });
+export async function searchJobs(search, page = 1, cursor = '') {
+  return apiFetch(`/api/jobs/search?${searchToParams(search, page, cursor)}`, {
+    networkError: 'Could not reach the app server. Make sure it is running.',
+  });
 }
 
 export async function fetchJobsStatus() {
