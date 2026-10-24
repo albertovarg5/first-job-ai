@@ -1,3 +1,5 @@
+import { findSkills } from './jobMatch.js';
+
 // Built-in library of sample interview questions. These are written examples,
 // not AI-generated, and the interface labels them that way.
 
@@ -154,7 +156,22 @@ function shuffle(list, seed) {
   return arr;
 }
 
-export function buildQuestionSet({ jobTitle, type, count = 5, seed }) {
+// Role-specific questions built from skills named in a job description.
+const PROPER_NAMES = new Set(['Python', 'Java', 'Excel', 'Figma', 'Canva', 'Tableau', 'Salesforce', 'QuickBooks', 'Spanish', 'Linux', 'Git', 'Agile', 'Statistics']);
+const skillWord = (s) => (/^[A-Z][a-z]+(?: [a-z]+)*$/.test(s) && !PROPER_NAMES.has(s) ? s.toLowerCase() : s);
+
+export function questionsFromJob(jobDescription, max = 3) {
+  return findSkills(jobDescription)
+    .slice(0, max)
+    .map(skillWord)
+    .map((skill) => ({
+      question: `This role mentions ${skill}. Tell me about a time you used ${skill} — or, if you haven't yet, how you would get up to speed.`,
+      category: 'technical',
+      source: 'job',
+    }));
+}
+
+export function buildQuestionSet({ jobTitle, type, count = 5, seed, jobDescription = '' }) {
   const field = fieldForTitle(jobTitle);
   const technical = TECHNICAL[field];
   const tag = (list, category) => list.map((question) => ({ question, category }));
@@ -173,6 +190,8 @@ export function buildQuestionSet({ jobTitle, type, count = 5, seed }) {
   }
   // "Tell me about yourself" is how most real interviews start.
   const opener = { question: GENERAL_QUESTIONS[0], category: 'general' };
-  const set = type === 'general' || type === 'mixed' ? [opener, ...pool] : pool;
+  // Questions about the posting's own skills replace some library questions.
+  const fromJob = type === 'technical' || type === 'mixed' ? questionsFromJob(jobDescription, type === 'mixed' ? Math.max(1, Math.floor(count / 3)) : count) : [];
+  const set = type === 'general' || type === 'mixed' ? [opener, ...fromJob, ...pool] : [...fromJob, ...pool];
   return { field, questions: set.slice(0, count) };
 }

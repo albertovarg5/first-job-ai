@@ -634,3 +634,33 @@ label.chip.selected { background: var(--ink); border-color: var(--ink); color: #
 .pipeline-label { color: var(--ink-2); }
 .pipeline-track { height: 8px; background: var(--surface-2); border-radius: 999px; overflow: hidden; }
 .pipeline-fill { display: block; height: 100%; border-radius: 999px; background: currentColor; min-width: 0; }
+.feedback-example { white-space: pre-wrap; background: var(--surface-2); border-radius: var(--r-sm); padding: 10px 12px; font-size: 14px; }
+
+/* ==========================================================================
+   Cover letters & Career assistant
+   ========================================================================== */
+.letter-editor { display: flex; flex-direction: column; gap: 16px; max-width: 900px; }
+.letter-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+.letter-text { font-size: 14.5px; line-height: 1.6; min-height: 360px; }
+.letter-card { text-align: left; cursor: pointer; font: inherit; color: inherit; }
+.letter-card:hover { border-color: var(--line-strong); }
+.letter-snippet { font-size: 13.5px; color: var(--ink-2); }
+.assistant-stack { display: flex; flex-direction: column; gap: 28px; max-width: 980px; }
+.assistant-section h2 { margin-bottom: 6px; }
+.section-title-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 6px; }
+.sub-title { margin: 22px 0 8px; }
+.mb-16 { margin-bottom: 16px; }
+.plain-fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
+.plain-fieldset legend { font-size: 13.5px; font-weight: 500; margin-bottom: 6px; padding: 0; }
+.match-stack { display: flex; flex-direction: column; gap: 8px; }
+.match-score { display: grid; grid-template-columns: auto 1fr auto; gap: 10px; align-items: center; font-size: 13px; }
+.skills-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; margin-top: 12px; }
+.skill-card { padding: 14px 16px; display: flex; flex-direction: column; gap: 6px; }
+.skill-card ul, .evidence-list { margin: 0; padding-left: 18px; font-size: 13.5px; display: flex; flex-direction: column; gap: 4px; }
+.ai-skills { margin-top: 14px; }
+.suggestion-list { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 10px; }
+.suggestion-list li { padding: 12px 14px; display: flex; flex-direction: column; gap: 4px; font-size: 13.5px; }
+@media (max-width: 640px) {
+  .match-score { grid-template-columns: 1fr auto; }
+  .match-score .subtle { grid-column: 1 / -1; }
+}

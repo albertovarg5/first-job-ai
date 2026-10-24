@@ -33,7 +33,7 @@ export default function TailorPanel({ resume }) {
   const getAiTips = async () => {
     setAiLoading(true);
     try {
-      const res = await callAi('tailor', { resumeText: resumeToText(resume), jobDescription: jobText });
+      const res = await callAi('tailor', { resumeText: resumeToText(resume, { includeContact: false }), jobDescription: jobText });
       setAiTips(res.suggestions);
     } catch (err) {
       toast.error(err.message);

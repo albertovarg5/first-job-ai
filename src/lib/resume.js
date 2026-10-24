@@ -60,10 +60,11 @@ export function resumeCompleteness(resume) {
   return resumeChecklist(resume).reduce((sum, item) => sum + (item.done ? item.weight : 0), 0);
 }
 
-// Plain text version used for job matching and AI prompts.
-export function resumeToText(resume) {
+// Plain text version used for job matching and AI prompts. AI prompts pass
+// { includeContact: false } so names, emails and phone numbers are not sent.
+export function resumeToText(resume, { includeContact = true } = {}) {
   const r = resume || emptyResume();
-  const parts = [r.contact?.fullName, r.summary];
+  const parts = [includeContact ? r.contact?.fullName : '', r.summary];
   for (const e of r.education || []) parts.push(e.school, e.degree, e.field, e.details);
   for (const key of ['experience', 'volunteering']) {
     for (const e of r[key] || []) parts.push(e.role, e.org, e.bullets);

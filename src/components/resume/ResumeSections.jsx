@@ -1,7 +1,11 @@
 import { useState } from 'react';
 import Icon from '../Icon.jsx';
-import { EmptyState, Field, TagInput } from '../ui.jsx';
+import { EmptyState, Field, Spinner, TagInput } from '../ui.jsx';
 import { ConfirmDialog } from '../Modal.jsx';
+import { useAppData } from '../../context/AppDataContext.jsx';
+import { useToast } from '../../context/ToastContext.jsx';
+import { callAi } from '../../lib/ai.js';
+import { basicSummary } from '../../lib/careerText.js';
 import BulletsEditor from './BulletsEditor.jsx';
 import { SECTION_TEMPLATES, resumeToText } from '../../lib/resume.js';
 import { findSkills } from '../../lib/jobMatch.js';
@@ -36,9 +40,65 @@ export function ContactSection({ resume, onChange }) {
 }
 
 export function SummarySection({ resume, onChange, targetRole }) {
+  const { aiActive } = useAppData();
+  const toast = useToast();
+  const [drafting, setDrafting] = useState(false);
+  const [confirmReplace, setConfirmReplace] = useState(false);
+  const [draftMode, setDraftMode] = useState(null);
   const length = resume.summary.trim().length;
+  const hasMaterial = resumeToText({ ...resume, summary: '' }, { includeContact: false }).trim().length > 20;
+
+  const draft = async () => {
+    setConfirmReplace(false);
+    setDrafting(true);
+    let summary = '';
+    let mode = 'basic';
+    if (aiActive) {
+      try {
+        const res = await callAi('summary', { resumeText: resumeToText({ ...resume, summary: '' }, { includeContact: false }), targetRole });
+        summary = res.summary.trim();
+        mode = 'ai';
+      } catch (err) {
+        toast.error(`AI is unavailable (${err.message}). Using a Basic-mode draft.`);
+      }
+    }
+    if (!summary) summary = basicSummary(resume, targetRole || '');
+    setDrafting(false);
+    if (!summary) {
+      toast.info('Add education, experience or skills first so there is something to summarize.');
+      return;
+    }
+    setDraftMode(mode);
+    onChange({ ...resume, summary });
+  };
+
   return (
     <div className="form-stack">
+      <div className="row-actions">
+        <button
+          type="button"
+          className="btn btn-secondary btn-sm"
+          disabled={drafting || !hasMaterial}
+          onClick={() => (resume.summary.trim() ? setConfirmReplace(true) : draft())}
+          title={hasMaterial ? undefined : 'Fill in other sections first'}
+        >
+          {drafting ? <Spinner /> : <Icon name={aiActive ? 'spark' : 'edit'} size={14} />} Draft from my resume
+        </button>
+        {draftMode && (
+          <span className="subtle">
+            {draftMode === 'ai' ? 'AI draft — check every word is true.' : 'Basic-mode draft built from your entries — edit it to sound like you.'}
+          </span>
+        )}
+      </div>
+      <ConfirmDialog
+        open={confirmReplace}
+        title="Replace your summary?"
+        message="A new draft will replace the summary you have now."
+        confirmLabel="Replace"
+        danger={false}
+        onCancel={() => setConfirmReplace(false)}
+        onConfirm={draft}
+      />
       <Field
         label="Professional summary"
         id="r-summary"

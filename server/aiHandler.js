@@ -9,6 +9,10 @@
 //   POST /api/ai/translate  -> { bullets: string[] }
 //   POST /api/ai/feedback   -> { summary, strengths[], improvements[], nextStep }
 //   POST /api/ai/tailor     -> { suggestions: string[] }
+//   POST /api/ai/coverLetter -> { letter, gaps[] }
+//   POST /api/ai/questions  -> { questions: [{ question, category }] }
+//   POST /api/ai/skills     -> { skills: [{ name, evidence }], suggestions: [{ title, detail }] }
+//   POST /api/ai/summary    -> { summary }
 
 const HONESTY_RULES = `Rules you must always follow:
 - Use only facts the user provided. Never invent numbers, percentages, results, tools, employers, titles, dates, responsibilities or achievements.
@@ -30,8 +34,9 @@ Return: {"bullets": ["..."]} with 1 to 4 bullets. Each bullet starts with a stro
     system: `You are a supportive, honest interview coach for people applying to their first jobs and internships.
 ${HONESTY_RULES}
 Evaluate the candidate's written answer. For behavioral questions, check the STAR structure (situation, task, action, result).
-Return: {"summary": "one or two sentences", "strengths": ["..."], "improvements": ["..."], "nextStep": "one concrete thing to try on the next attempt"}.
-Give 1-3 strengths and 1-3 improvements. Quote or reference their actual words. Do not write a full replacement answer.`,
+Return: {"summary": "one or two sentences", "strengths": ["..."], "improvements": ["..."], "example": "...", "nextStep": "one concrete thing to try on the next attempt"}.
+Give 1-3 strengths and 1-3 improvements. Quote or reference their actual words.
+"example" is a short outline (3-5 lines, e.g. "Situation: ...") showing how THEIR answer could be structured better, using only details they wrote. Where a detail is missing, write a bracketed prompt such as [what was the result?] instead of inventing it.`,
     user: ({ question, answer, jobTitle, category }) =>
       `Target job: ${jobTitle || 'not specified'}\nQuestion type: ${category}\nQuestion: ${question}\nCandidate's answer:\n"""${answer}"""`,
     validate: (j) => typeof j.summary === 'string' && Array.isArray(j.strengths) && Array.isArray(j.improvements),
@@ -44,6 +49,73 @@ Compare the resume with the job description. Suggest how to better present exper
 Return: {"suggestions": ["..."]} with 3 to 6 specific suggestions.`,
     user: ({ resumeText, jobDescription }) => `RESUME:\n"""${resumeText}"""\n\nJOB DESCRIPTION:\n"""${jobDescription}"""`,
     validate: (j) => Array.isArray(j.suggestions),
+  },
+  coverLetter: {
+    maxTokens: 1500,
+    system: `You write cover letters for students and early-career job seekers.
+${HONESTY_RULES}
+Use ONLY experience, education, skills and achievements that appear in the candidate's resume or notes. Never claim the candidate has a skill, tool, qualification or result that is not written there, even if the job asks for it.
+If the job requires something the candidate does not show, do not mention it as a strength; list it in "gaps" instead.
+Write 3-4 short paragraphs (under 350 words total), addressed "Dear Hiring Manager," unless a name is given, and end with "Sincerely," followed by a new line with [Your name].
+Return: {"letter": "full letter text with \n between paragraphs", "gaps": ["requirements from the posting the resume does not show"]}.`,
+    user: ({ resumeText, jobTitle, company, jobDescription, notes, tone }) =>
+      `Tone: ${tone || 'professional'}
+Job title: ${jobTitle}
+Company: ${company}
+
+JOB DESCRIPTION:
+"""${jobDescription}"""
+
+CANDIDATE RESUME:
+"""${resumeText}"""
+
+CANDIDATE'S OWN NOTES (why this job, things to mention):
+"""${notes || 'none'}"""`,
+    validate: (j) => typeof j.letter === 'string' && j.letter.trim().length > 50 && (j.gaps === undefined || Array.isArray(j.gaps)),
+  },
+  questions: {
+    maxTokens: 1200,
+    system: `You are an interviewer preparing realistic first-round interview questions for an entry-level candidate.
+${HONESTY_RULES}
+Base role-specific questions on the job title and on duties or skills actually written in the job description. Do not assume details the posting does not state.
+Each question has a category: "general", "behavioral" (a "Tell me about a time..." question) or "technical" (role-specific skills or knowledge).
+Return: {"questions": [{"question": "...", "category": "general|behavioral|technical"}]}.`,
+    user: ({ jobTitle, jobDescription, type, count }) =>
+      `Job title: ${jobTitle}
+Interview type wanted: ${type || 'mixed'} (mixed = a balance of all three categories)
+Number of questions: ${count}
+
+JOB DESCRIPTION:
+"""${jobDescription || 'not provided'}"""`,
+    validate: (j) =>
+      Array.isArray(j.questions) &&
+      j.questions.length > 0 &&
+      j.questions.every((q) => q && typeof q.question === 'string' && ['general', 'behavioral', 'technical'].includes(q.category)),
+  },
+  skills: {
+    maxTokens: 1400,
+    system: `You help students and career changers recognize transferable skills in experience they already have.
+${HONESTY_RULES}
+Identify skills that are clearly supported by the resume text. For each one, "evidence" must be a short exact quote copied from the resume (5-20 words) that shows the skill. If you cannot quote evidence, leave the skill out.
+Then suggest practical, realistic ways to strengthen qualifications for the target role (courses, small projects, volunteering, certifications). These are suggestions, not facts about the candidate.
+Return: {"skills": [{"name": "...", "evidence": "exact quote"}], "suggestions": [{"title": "...", "detail": "..."}]} with up to 10 skills and 3-5 suggestions.`,
+    user: ({ resumeText, targetRole }) => `Target role: ${targetRole || 'not specified'}
+
+RESUME:
+"""${resumeText}"""`,
+    validate: (j) => Array.isArray(j.skills) && Array.isArray(j.suggestions),
+  },
+  summary: {
+    maxTokens: 500,
+    system: `You write the 2-3 sentence summary at the top of an entry-level resume.
+${HONESTY_RULES}
+Mention the target role, the candidate's education or most relevant experience, and 2-3 skills that appear in the resume. Do not use the words "passionate" or "rockstar". Do not use first person ("I").
+Return: {"summary": "..."}.`,
+    user: ({ resumeText, targetRole }) => `Target role: ${targetRole || 'not specified'}
+
+RESUME:
+"""${resumeText}"""`,
+    validate: (j) => typeof j.summary === 'string' && j.summary.trim().length > 20,
   },
 };
 

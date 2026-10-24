@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import Icon from '../components/Icon.jsx';
 import FeedbackView from '../components/FeedbackView.jsx';
+import JobPicker from '../components/jobs/JobPicker.jsx';
 import { ConfirmDialog } from '../components/Modal.jsx';
 import { EmptyState, Field, ModeNotice, PageHeader, ProgressBar, Segmented, Spinner } from '../components/ui.jsx';
 import { useAppData } from '../context/AppDataContext.jsx';
@@ -17,10 +18,19 @@ const CATEGORY_TIP = {
   technical: 'Explain your thinking step by step and mention a real example if you have one.',
 };
 
-function Setup({ onStart, defaultTitle }) {
+const QUESTION_SOURCE = {
+  ai: 'AI-generated question based on the job you entered',
+  job: 'Based on a skill named in the job description',
+  library: 'Sample question from the built-in library',
+};
+
+function Setup({ onStart, defaultTitle, busy }) {
+  const { aiActive } = useAppData();
   const [jobTitle, setJobTitle] = useState(defaultTitle || '');
+  const [jobDescription, setJobDescription] = useState('');
   const [type, setType] = useState('mixed');
   const [count, setCount] = useState(5);
+  const [useAi, setUseAi] = useState(true);
   const [error, setError] = useState('');
 
   const start = (e) => {
@@ -29,7 +39,7 @@ function Setup({ onStart, defaultTitle }) {
       setError('Enter the job title you’re preparing for.');
       return;
     }
-    onStart({ jobTitle: jobTitle.trim(), type, count });
+    onStart({ jobTitle: jobTitle.trim(), type, count, jobDescription: jobDescription.trim(), useAi: aiActive && useAi });
   };
 
   return (
@@ -48,6 +58,28 @@ function Setup({ onStart, defaultTitle }) {
             placeholder="e.g. Marketing intern"
           />
         </Field>
+        <JobPicker
+          id="iv-pick"
+          label="Practice for a saved or tracked job (optional)"
+          onPick={(job) => {
+            setJobTitle(job.title);
+            setJobDescription(job.description);
+            setError('');
+          }}
+        />
+        <Field
+          label="Job description (optional)"
+          id="iv-desc"
+          hint="Paste the posting to get questions about the skills it asks for."
+        >
+          <textarea id="iv-desc" className="textarea" rows={4} maxLength={12000} value={jobDescription} onChange={(e) => setJobDescription(e.target.value)} />
+        </Field>
+        {aiActive && (
+          <label className="checkbox">
+            <input type="checkbox" checked={useAi} onChange={(e) => setUseAi(e.target.checked)} />
+            Generate questions with AI from the job title{jobDescription.trim() ? ' and description' : ''}
+          </label>
+        )}
         <Field label="Interview type">
           <div className="choice-grid" role="radiogroup" aria-label="Interview type">
             {INTERVIEW_TYPES.map((t) => (
@@ -71,8 +103,8 @@ function Setup({ onStart, defaultTitle }) {
           />
         </Field>
         <div>
-          <button type="submit" className="btn btn-primary btn-lg">
-            <Icon name="play" size={15} /> Start practicing
+          <button type="submit" className="btn btn-primary btn-lg" disabled={busy}>
+            {busy ? <Spinner /> : <Icon name="play" size={15} />} {busy ? 'Preparing questions…' : 'Start practicing'}
           </button>
         </div>
       </div>
@@ -111,7 +143,12 @@ function Session({ session, onUpdate, onFinish, onExit }) {
     let feedback;
     if (aiActive) {
       try {
-        const res = await callAi('feedback', { question: item.question, answer: draft, jobTitle: session.jobTitle, category: item.category });
+        const res = await callAi('feedback', {
+          question: item.question,
+          answer: draft,
+          jobTitle: session.jobTitle,
+          category: item.category,
+        });
         feedback = { mode: 'ai', model: aiStatus.model, ...res };
       } catch (err) {
         feedback = { ...checkAnswer({ question: item.question, answer: draft, category: item.category }), fallbackReason: err.message };
@@ -167,7 +204,7 @@ function Session({ session, onUpdate, onFinish, onExit }) {
       <section className="panel question-card">
         <div className="question-meta">
           <span className="badge">{CATEGORY_LABEL[item.category]}</span>
-          <span className="subtle">Sample question from the built-in library</span>
+          <span className="subtle">{QUESTION_SOURCE[item.source] || QUESTION_SOURCE.library}</span>
         </div>
         <h2 className="question-text">{item.question}</h2>
         <p className="question-tip">
@@ -250,20 +287,33 @@ export default function InterviewPractice() {
   const [activeId, setActiveId] = useState(null);
   const [summaryId, setSummaryId] = useState(null);
   const [deleting, setDeleting] = useState(null);
+  const [preparing, setPreparing] = useState(false);
 
   const sessions = data.interviewSessions;
   const active = sessions.find((s) => s.id === activeId);
   const summary = sessions.find((s) => s.id === summaryId);
 
-  const start = ({ jobTitle, type, count }) => {
-    const { questions } = buildQuestionSet({ jobTitle, type, count });
+  const start = async ({ jobTitle, type, count, jobDescription, useAi }) => {
+    let questions = null;
+    if (useAi) {
+      setPreparing(true);
+      try {
+        const res = await callAi('questions', { jobTitle, jobDescription, type, count: String(count) });
+        questions = res.questions.slice(0, count).map((q) => ({ question: q.question.trim(), category: q.category, source: 'ai' }));
+      } catch (err) {
+        toast.error(`AI questions are unavailable (${err.message}). Using the built-in library instead.`);
+      } finally {
+        setPreparing(false);
+      }
+    }
+    if (!questions?.length) questions = buildQuestionSet({ jobTitle, type, count, jobDescription }).questions;
     const session = {
       id: createId('iv'),
       jobTitle,
       type,
       startedAt: new Date().toISOString(),
       completedAt: null,
-      items: questions.map((q) => ({ ...q, answer: '', feedback: null })),
+      items: questions.map((q) => ({ source: 'library', ...q, answer: '', feedback: null })),
     };
     actions.saveInterviewSession(session);
     setActiveId(session.id);
@@ -341,9 +391,9 @@ export default function InterviewPractice() {
             <ModeNotice
               aiActive={aiActive}
               aiStatus={aiStatus}
-              basicText="Questions come from a built-in library of sample questions. Feedback is an automated checklist (length, STAR structure, specifics) — useful, but not personalized like a coach or AI."
+              basicText="Questions come from a built-in library, plus questions about skills named in a job description you paste. Feedback is an automated checklist (length, STAR structure, specifics) — useful, but not personalized like a coach or AI."
             />
-            <Setup onStart={start} defaultTitle={data.profile?.targetRole} />
+            <Setup onStart={start} defaultTitle={data.profile?.targetRole} busy={preparing} />
           </div>
         )
       ) : sessions.length ? (

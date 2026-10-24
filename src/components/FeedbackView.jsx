@@ -34,6 +34,13 @@ export default function FeedbackView({ feedback }) {
             </ul>
           </div>
         )}
+        {typeof feedback.example === 'string' && feedback.example.trim() && (
+          <div className="feedback-group">
+            <h4>A stronger structure, using your details</h4>
+            <p className="feedback-example">{feedback.example}</p>
+            <p className="subtle">Fill in anything in [brackets] with what really happened — don’t add details that aren’t true.</p>
+          </div>
+        )}
         {feedback.nextStep && (
           <p className="feedback-next">
             <strong>Try next:</strong> {feedback.nextStep}
