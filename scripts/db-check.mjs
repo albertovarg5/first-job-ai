@@ -1,36 +1,51 @@
 // Read-only look at a database: npm run db:check -- [you@example.com]
 //
-// From your own computer against Railway (paste the Postgres service's
-// DATABASE_PUBLIC_URL into your own terminal, never into a chat):
-//   $env:DATABASE_URL = Read-Host "Paste DATABASE_PUBLIC_URL"
-//   npm run db:check -- you@example.com
-//   Remove-Item Env:DATABASE_URL
+// Uses DATABASE_URL, or the LOCAL development database when it isn't set.
+// Inside the Railway backend (railway ssh) it uses the backend's own private
+// DATABASE_URL. Before it is deployed, the same file can be pasted there:
+//   cd /app && node --input-type=module - you@example.com <<'EOF'
+//   …this whole file…
+//   EOF
 //
-// PostgreSQL is opened in a read-only session, so the server itself refuses
-// any write. Prints the host and database name (never the password), the
+// PostgreSQL is opened in a read-only session and every query runs in a
+// READ ONLY transaction that is rolled back, so the database refuses any
+// write. Prints the host and database name (never the user or password), the
 // schema version, the number of accounts, and only yes/no for the email.
-// Without DATABASE_URL it reads the LOCAL development database instead.
 import { existsSync } from 'node:fs';
-import { MIGRATIONS, describeTarget, isPostgresUrl, openDatabase } from '../server/db.js';
+import { pathToFileURL } from 'node:url';
+
+// Loaded from the app folder (the current directory), so the pasted copy finds it too.
+const { MIGRATIONS, describeTarget, isPostgresUrl, openDatabase } = await import(pathToFileURL(`${process.cwd()}/server/db.js`).href);
 
 if (existsSync('.env')) process.loadEnvFile('.env');
 const target = String(process.env.DATABASE_URL || 'data/pglite').trim();
 const email = String(process.argv[2] || '').trim().toLowerCase(); // Normalized like sign-up, sign-in and reset.
+
+if (!isPostgresUrl(target) && process.env.RAILWAY_PROJECT_ID) {
+  console.error('DATABASE_URL is not set in this Railway shell, so there is nothing to check. Open the shell of the backend service (railway link, choose the backend, then railway ssh). Nothing was read or changed.');
+  process.exit(1);
+}
 
 let db;
 let close;
 if (isPostgresUrl(target)) {
   const { default: pg } = await import('pg');
   const client = new pg.Client({ connectionString: target, connectionTimeoutMillis: 15000, options: '-c default_transaction_read_only=on' });
-  await client.connect();
-  db = { one: async (sql, params) => (await client.query(sql, params)).rows[0] ?? null };
+  try {
+    await client.connect();
+  } catch (err) {
+    console.error(`Couldn’t connect to ${describeTarget(target)}: ${err.message}. Nothing was read or changed.`);
+    process.exit(1);
+  }
+  db ={ one: async (sql, params) => (await client.query(sql, params)).rows[0] ?? null };
   close = () => client.end();
 } else {
   db = await openDatabase(target);
   close = () => db.close();
 }
 
-console.log(`Database: ${describeTarget(target)}${isPostgresUrl(target) ? ' (read-only session)' : ' — LOCAL, not production'}`);
+console.log(`Database: ${describeTarget(target)}${isPostgresUrl(target) ? ' (read-only)' : ' — LOCAL, not production'}`);
+await db.one('BEGIN TRANSACTION READ ONLY');
 try {
   const schema = await db.one("SELECT to_regclass('public.schema_version') AS t, to_regclass('public.users') AS u");
   if (!schema.t || !schema.u) {
@@ -48,5 +63,6 @@ try {
     }
   }
 } finally {
+  await db.one('ROLLBACK').catch(() => {});
   await close();
 }
