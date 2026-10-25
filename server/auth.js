@@ -100,6 +100,8 @@ async function sendResetEmail(env, to, link) {
     const detail = await res.json().then((b) => b?.message || b?.name || '', () => '');
     throw new Error(`Resend returned status ${res.status}${detail ? `: ${detail}` : ''}`);
   }
+  // Resend's id for this email: search for it under Emails in the Resend dashboard.
+  return (await res.json().catch(() => null))?.id || 'unknown';
 }
 
 // beforeDeleteUser(userId) runs before an account is deleted and may throw to stop it
@@ -248,7 +250,8 @@ export function createAuth({ db, env = {}, log = console, beforeDeleteUser }) {
         const link = `${base}/reset-password?token=${token}`;
         if (emailConfigured) {
           try {
-            await sendResetEmail(env, user.email, link);
+            const emailId = await sendResetEmail(env, user.email, link);
+            log.info?.(`[auth] Reset email accepted by Resend (email id ${emailId}).`);
           } catch (err) {
             log.error?.(`[auth] Could not send the reset email: ${err.message}`);
             throw new HttpError(502, 'We couldn’t send the email right now. Please try again later.', 'email_failed');
@@ -256,6 +259,9 @@ export function createAuth({ db, env = {}, log = console, beforeDeleteUser }) {
         } else {
           log.info?.(`\n[First Job AI] Password reset link for ${user.email} (development only, valid ${RESET_MINUTES} min):\n${link}\n`);
         }
+      } else {
+        // Only the server log says so (never the address); the visitor gets the same answer either way.
+        log.info?.('[auth] Reset requested for an email with no account: nothing was sent.');
       }
       // Same answer whether or not the account exists.
       return send(res, 200, {

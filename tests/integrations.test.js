@@ -133,9 +133,10 @@ test('AI: refusals, cut-off answers, bad JSON and network failures are handled',
 
 test('password reset email is sent through Resend with the configured sender', async () => {
   const db = await openDatabase(':memory:');
+  const logs = [];
   const api = createApi(
     { RESEND_API_KEY: 're_test', EMAIL_FROM: 'First Job AI <no-reply@example.com>', APP_URL: 'https://jobs.example.com' },
-    { db, log: quietLog },
+    { db, log: { ...quietLog, info: (m) => logs.push(m), error: (m) => logs.push(m) } },
   );
   await call(api, 'POST', '/auth/signup', { email: 'mail@example.com', password: 'a long pass phrase' });
   const sent = [];
@@ -153,6 +154,8 @@ test('password reset email is sent through Resend with the configured sender', a
   assert.equal(sent[0].body.from, 'First Job AI <no-reply@example.com>');
   assert.deepEqual(sent[0].body.to, ['mail@example.com']);
   assert.match(sent[0].body.text, /https:\/\/jobs\.example\.com\/reset-password\?token=/);
+  // The log names Resend's email id (to look it up in the Resend dashboard), never the address or token.
+  assert.match(logs.at(-1), /accepted by Resend \(email id email_1\)/);
 
   // Unknown emails get the same answer and send nothing.
   const unknown = await withFetch(
@@ -160,15 +163,20 @@ test('password reset email is sent through Resend with the configured sender', a
     () => call(api, 'POST', '/auth/forgot', { email: 'nobody@example.com' }),
   );
   assert.equal(unknown.body.message, res.body.message);
+  assert.match(logs.at(-1), /no account: nothing was sent/);
 
-  // A Resend failure is reported without leaking details to the browser.
+  // A Resend failure is reported without leaking details to the browser. This
+  // is Resend's answer for onboarding@resend.dev and a recipient other than the account's own email.
   const failed = await withFetch(
-    async () => jsonResponse({ name: 'validation_error', message: 'The example.com domain is not verified.' }, 403),
+    async () => jsonResponse({ name: 'validation_error', message: 'You can only send testing emails to your own email address.' }, 403),
     () => call(api, 'POST', '/auth/forgot', { email: 'mail@example.com' }),
   );
   assert.equal(failed.status, 502);
   assert.equal(failed.body.code, 'email_failed');
   assert.ok(!failed.body.error.includes('re_test'));
+  assert.match(logs.at(-1), /Resend returned status 403: You can only send testing emails/);
+  const token = sent[0].body.text.match(/token=([\w-]+)/)[1];
+  for (const line of logs) assert.ok(!line.includes('mail@example.com') && !line.includes(token) && !line.includes('re_test'), 'no address, token or key in the log');
 });
 
 // ---------- Saved jobs + tracker persistence ----------
