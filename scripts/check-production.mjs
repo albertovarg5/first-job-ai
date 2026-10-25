@@ -1,17 +1,18 @@
 // Read-only launch check: npm run check:production
 //
-// Run it where the production environment variables are set (on Render: the
-// service's Shell tab). It never changes anything in Stripe or the database,
-// and never prints secret values. Exit code 1 means something must be fixed.
+// Run it where the production environment variables are set: inside the
+// Railway service (`railway ssh`, then `npm run check:production`). It never
+// changes anything in Stripe or the database, and never prints secret values.
+// Exit code 1 means something must be fixed.
 //
-// Checks: server settings, database storage, HTTPS, the Anthropic key,
+// Checks: server settings, the database, HTTPS, the Anthropic key,
 // and the Stripe account, prices, webhook endpoint and customer portal for
 // the mode of STRIPE_SECRET_KEY (test or live).
-import { accessSync, constants, existsSync } from 'node:fs';
-import { dirname, isAbsolute, resolve } from 'node:path';
+import { existsSync } from 'node:fs';
 import Stripe from 'stripe';
 import { billingConfig } from '../server/billing.js';
 import { checkConfig } from '../server/config.js';
+import { describeTarget, isPostgresUrl, openDatabase } from '../server/db.js';
 
 if (existsSync('.env') && process.env.NODE_ENV !== 'production') process.loadEnvFile('.env');
 const env = process.env;
@@ -47,20 +48,20 @@ if (/^https:\/\/[^/]+$/.test(appUrl)) ok(`APP_URL is ${appUrl}`);
 else fail('APP_URL must be the public https:// address, without a path (e.g. https://firstjob.example.com)');
 
 // ---------- Database ----------
-section('Database storage');
-const dbPath = String(env.DATABASE_PATH || '').trim();
-if (dbPath && isAbsolute(dbPath)) {
-  ok(`DATABASE_PATH is ${dbPath}`);
+section('Database (PostgreSQL)');
+const dbUrl = String(env.DATABASE_URL || '').trim();
+if (isPostgresUrl(dbUrl)) {
   try {
-    accessSync(dirname(resolve(dbPath)), constants.W_OK);
-    ok('The database folder exists and is writable');
-  } catch {
-    fail(`The folder ${dirname(resolve(dbPath))} doesn't exist or isn't writable. Is the persistent disk mounted there?`);
+    const db = await openDatabase(dbUrl);
+    const users = (await db.one('SELECT COUNT(*)::int AS n FROM users')).n;
+    const version = (await db.one('SELECT version FROM schema_version')).version;
+    ok(`Connected to ${describeTarget(dbUrl)} (schema version ${version}, ${users} account(s))`);
+    await db.close();
+  } catch (err) {
+    fail(`Couldn’t connect to ${describeTarget(dbUrl)}: ${err.message}`);
   }
-  if (existsSync(dbPath)) ok('The database file exists');
-  else warn('The database file doesn’t exist yet (normal before the first start).');
 } else {
-  fail('DATABASE_PATH must be an absolute path on the persistent disk, e.g. /var/data/first-job-ai.db');
+  fail('DATABASE_URL must be the postgresql:// address of the production database');
 }
 
 // ---------- HTTPS ----------
@@ -164,14 +165,15 @@ if (!billing.secretKey) {
 
   // Webhook endpoint
   if (appUrl) {
-    const target = `${appUrl}/api/billing/webhook`;
+    // Either through the site's address, or straight to the backend (Railway sets RAILWAY_PUBLIC_DOMAIN).
+    const targets = [appUrl, env.RAILWAY_PUBLIC_DOMAIN && `https://${env.RAILWAY_PUBLIC_DOMAIN}`].filter(Boolean).map((u) => `${u}/api/billing/webhook`);
     try {
       const endpoints = await stripe.webhookEndpoints.list({ limit: 100 });
-      const ep = endpoints.data.find((e) => e.url.replace(/\/$/, '') === target);
+      const ep = endpoints.data.find((e) => targets.includes(e.url.replace(/\/$/, '')));
       if (!ep) {
-        fail(`No ${mode.toLowerCase()}-mode webhook endpoint for ${target} (Developers → Webhooks → Add endpoint)`);
+        fail(`No ${mode.toLowerCase()}-mode webhook endpoint for ${targets.join(' or ')} (Developers → Webhooks → Add endpoint)`);
       } else {
-        ok(`Webhook endpoint ${target} exists`);
+        ok(`Webhook endpoint ${ep.url} exists`);
         if (ep.status === 'enabled') ok('Webhook endpoint is enabled');
         else fail('Webhook endpoint is disabled');
         const all = ep.enabled_events.includes('*');
@@ -180,7 +182,7 @@ if (!billing.secretKey) {
         else ok('Webhook endpoint sends every required event');
         console.log('  • The signing secret itself can’t be read back from Stripe. After launch, a failed signature shows as "Rejected a webhook with an invalid signature" in the server log.');
       }
-      const others = endpoints.data.filter((e) => e.url.replace(/\/$/, '') !== target);
+      const others = endpoints.data.filter((e) => !targets.includes(e.url.replace(/\/$/, '')));
       if (others.length) warn(`Other webhook endpoints on this account also receive events: ${others.map((e) => e.url).join(', ')}`);
     } catch (err) {
       fail(`Couldn’t list webhook endpoints (${err.message})`);

@@ -94,8 +94,8 @@ Every API is **optional**: the app starts without any keys and each feature expl
 | `AI_MODEL` | Optional | Defaults to `claude-sonnet-5-5`. Set `claude-opus-5-5` for the most capable model (higher cost per request). |
 | `AI_FREE_MONTHLY_LIMIT` | Optional | AI requests per signed-in user per month on the Free plan (default 20). Failed requests don't count. |
 | `AI_PREMIUM_MONTHLY_LIMIT` | Optional | Same for the Premium plan (default 200). |
-| `DATABASE_PATH` | Accounts | SQLite file. Default `data/first-job-ai.db`. Use a persistent disk in production. |
-| `APP_URL` | Password reset (production) | Public URL of the site, e.g. `https://firstjob.example.com`. |
+| `DATABASE_URL` | Production | PostgreSQL address (`postgresql://…`). Blank = a local development database in `data/pglite`. Required on a server. |
+| `APP_URL` | Production | Public URL of the site (the Vercel address), e.g. `https://firstjob.example.com`. Used for Stripe/reset links and to accept requests forwarded by Vercel. |
 | `RESEND_API_KEY`, `EMAIL_FROM` | Password reset emails | From <https://resend.com>, with a verified sender domain. |
 | `PORT` | Optional | Production port (default 3000). |
 | `TRUST_PROXY` | Optional | `true` behind a proxy that sets `X-Forwarded-For` (for correct rate limiting). |
@@ -128,7 +128,9 @@ How it works: the browser calls `/api/jobs/search` on this app; the server adds 
 
 ### Accounts, saved jobs and password reset
 
-Accounts work out of the box with a local SQLite file (`data/first-job-ai.db`, ignored by Git). Nothing to install: it uses Node's built-in `node:sqlite`.
+Accounts are stored in PostgreSQL. On your computer they work out of the box: without `DATABASE_URL` the app uses PGlite, the same PostgreSQL running inside Node, stored in `data/pglite` (ignored by Git). Nothing to install. Only one program can use that folder at a time, so run either `npm run dev` or `npm start`, not both. In production, `DATABASE_URL` points to a real PostgreSQL server.
+
+**Coming from the SQLite version?** `npm run db:import` copies `data/first-job-ai.db` into PostgreSQL (`DATABASE_URL`, or the local database). The SQLite file is never changed; a copy goes to `data/backups` first. The import only runs into an empty database, happens in one transaction and checks every table's row count.
 
 When you're signed in, everything you save — profile, resume, **saved jobs**, **tracker entries and their statuses** (Interested → Applying → Applied → Interview → Offer / Rejected), cover letters, practice — is stored in your account in that database and comes back after a refresh, signing out and in, or a server restart. As a guest, the same data is kept in this browser only. **Save** on a job card keeps the listing; **Track** adds it to the Job Tracker as *Interested*, and the card then shows its current tracker status.
 
@@ -241,7 +243,7 @@ To switch real payments off again at any time, remove `STRIPE_ALLOW_LIVE` (or se
 npm test
 ```
 
-78 tests cover: job search for both providers (OpenWeb Ninja `search-v2` with cursor paging and RapidAPI; provider detection, validation, success, caching, empty results, duplicate listings, missing fields, invalid/unsubscribed key, rate limit, upstream errors, network failure, timeout, monthly limit), settings validation (`VITE_` secrets, half-configured email, bad limits), Anthropic error handling (bad key, unknown model, rate limit, overloaded, no credit, refusal, cut-off answer), Resend email sending, saved jobs and tracker entries persisting per user in a real SQLite file across sign-out, sign-in and restart, job search sign-in rules, saved-job dedupe, tracker duplicates and status history, accounts (hashing, sessions, sign-in errors, rate limiting, reset tokens, change password, delete account), **per-user data isolation**, CSRF blocking, save conflicts, data validation, migrations, honesty checks for cover letters/summaries/skills, job recommendations, AI route validation, plus the original translator, resume, PDF, missions and interview tests.
+128 tests (run against PostgreSQL via PGlite) cover: moving the SQLite data into PostgreSQL, backup and restore, Stripe checkout, webhooks, cancellation and refunds, job search for both providers (OpenWeb Ninja `search-v2` with cursor paging and RapidAPI; provider detection, validation, success, caching, empty results, duplicate listings, missing fields, invalid/unsubscribed key, rate limit, upstream errors, network failure, timeout, monthly limit), settings validation (`VITE_` secrets, half-configured email, bad limits), Anthropic error handling (bad key, unknown model, rate limit, overloaded, no credit, refusal, cut-off answer), Resend email sending, saved jobs and tracker entries persisting per user in the database across sign-out, sign-in and restart, job search sign-in rules, saved-job dedupe, tracker duplicates and status history, accounts (hashing, sessions, sign-in errors, rate limiting, reset tokens, change password, delete account), **per-user data isolation**, CSRF blocking, save conflicts, data validation, migrations, honesty checks for cover letters/summaries/skills, job recommendations, AI route validation, plus the original translator, resume, PDF, missions and interview tests.
 
 The tests never call the real JSearch or Anthropic APIs; those calls are simulated.
 
@@ -262,33 +264,32 @@ The tests never call the real JSearch or Anthropic APIs; those calls are simulat
 
 ## Deployment
 
-The app is a single Node.js server (`server/index.js`) that serves the built site and the API from the **same address**, so the frontend always talks to the right backend with no extra URL setting. It needs a host that runs a long-lived Node process **with a persistent disk** for the SQLite file — for example Render (with a disk), Railway (with a volume), Fly.io (with a volume) or a small VPS. Purely static/serverless hosts (Netlify, Vercel functions, GitHub Pages) are **not** suitable for accounts as-is.
+Production runs on three services:
 
-**Step-by-step launch guide (Render, domain, Stripe live mode): [docs/DEPLOY.md](docs/DEPLOY.md).** The repository includes a Render Blueprint ([render.yaml](render.yaml)) and a read-only launch check (`npm run check:production`).
+- **Vercel** builds and serves the React app. [vercel.json](vercel.json) forwards `/api/*` and `/healthz` to the backend, so the browser only ever talks to the Vercel address: login cookies stay first-party and no CORS is needed.
+- **Railway** runs the backend (`npm start`, API-only) with [railway.json](railway.json): health check on `/healthz`, restart on failure.
+- **Railway PostgreSQL** stores accounts, saved data, AI usage and subscriptions (`DATABASE_URL`).
 
-In short, on Render:
+**Step-by-step launch guide (Railway, PostgreSQL, Vercel, Stripe live mode): [docs/DEPLOY.md](docs/DEPLOY.md).** A read-only launch check is included (`npm run check:production`).
 
-1. Push the repository to GitHub (`.env` and `data/` are ignored — check with `git status`).
-2. New **Blueprint** → your repo (or a Web Service with build command `npm ci --include=dev && npm run build` — the `--include=dev` matters because `NODE_ENV=production` would skip Vite — and start command `npm start`).
-3. A **Disk** mounted at `/var/data` with `DATABASE_PATH=/var/data/first-job-ai.db`. Without it, every deploy erases all accounts and subscriptions.
-4. Environment variables in the dashboard (see [docs/DEPLOY.md](docs/DEPLOY.md)).
-5. Use **one instance** (rate limits and the job-search cache are kept in memory; SQLite is a single file).
+Use **one backend instance** (rate limits and the job-search cache are kept in memory).
 
-In production the server also writes a consistent database backup at startup and every 24 hours to `backups/` next to the database (keeps 14; `BACKUP_DIR`, `BACKUP_KEEP`, `BACKUP_DISABLED=true` to change), and `npm run backup` makes one on demand.
+Backups: use the Postgres service's backups on Railway, and `npm run backup` with `DATABASE_URL` set to Railway's public Postgres address to keep a copy on your own computer. It writes a SQLite snapshot file that `npm run db:import` can restore into an empty database. Automatic daily snapshots run only when `BACKUP_DIR` points to a Railway volume (keeps 14; `BACKUP_KEEP`, `BACKUP_DISABLED=true` to change).
 
 ### Deployment checklist
 
 - [ ] `npm test` and `npm run build` pass locally.
 - [ ] No `.env`, `data/` or `*.db` files are committed (`git ls-files`).
 - [ ] Secrets are set in the host's dashboard, not in the repository.
-- [ ] `NODE_ENV=production`, `APP_URL` (https) and `DATABASE_PATH` on a persistent disk are set.
+- [ ] `NODE_ENV=production`, `APP_URL` (the https Vercel address) and `DATABASE_URL` (Railway PostgreSQL) are set on the backend.
+- [ ] `vercel.json` points `/api` and `/healthz` to the Railway backend address.
 - [ ] HTTPS is on (cookies are `Secure` in production and won't work over plain http).
-- [ ] `TRUST_PROXY=true` if the host puts a proxy in front of the app.
+- [ ] `TRUST_PROXY=true` on Railway (it and Vercel sit in front of the app).
 - [ ] `JSEARCH_MONTHLY_LIMIT` matches your JSearch plan.
 - [ ] The first lines of the server log say AI / Job search / Reset email are `on` as expected, with no `[config]` warnings you didn't expect.
 - [ ] Resend sender domain verified if you want password reset.
-- [ ] The log shows `[backup] Wrote …` after start; copy a backup off the server now and then.
-- [ ] `npm run check:production` (in the host's shell) shows no ✖.
+- [ ] Railway Postgres backups are on, and `npm run backup` against the public Postgres address works from your computer.
+- [ ] `npm run check:production` (inside the Railway service via `railway ssh`) shows no ✖.
 - [ ] If Premium is on: live Stripe keys, live Price IDs and the live webhook secret are set; the log says `Premium billing: LIVE`; one real purchase, cancellation and refund were tested.
 
 ### Verify the deployed app
@@ -330,7 +331,9 @@ first-job-ai/
 │   ├── api.js           Combines all /api routes, CSRF check, sign-in gate, rate limits
 │   ├── auth.js          Accounts, sessions, password reset
 │   ├── dataHandler.js   Per-user saved data with conflict detection
-│   ├── db.js            SQLite database and migrations
+│   ├── db.js            PostgreSQL (pg in production, PGlite locally) and migrations
+│   ├── importSqlite.js  Copies the old SQLite database (or a backup) into PostgreSQL
+│   ├── backup.js        Database snapshots
 │   ├── jobsHandler.js   JSearch job search (OpenWeb Ninja or RapidAPI)
 │   ├── config.js        Checks settings at startup and explains problems
 │   ├── aiHandler.js     Anthropic AI tasks
@@ -357,7 +360,7 @@ The full launch-readiness list (what's complete, what still needs work, remainin
 
 - Job listings depend on JSearch; availability, salaries and dates are only as accurate as the source. The app can't confirm a job is still open.
 - Rate limits and the search cache are in memory: run a single server instance (or move them to a shared store such as Redis).
-- SQLite (`node:sqlite`) is marked *experimental* by Node.js; it works on Node 22.13+ and 24, and the app hides the warning in `npm start`.
+- Backups and the SQLite import use `node:sqlite`, which Node.js marks *experimental*; it works on Node 22.13+ and 24, and the app hides the warning.
 - Account data is saved as one document per user; two tabs editing at the same moment get a "changed in another tab" prompt rather than an automatic merge.
 - Password reset email requires Resend. There is no email verification at sign-up yet.
 - Interview answers are typed, not spoken. One resume per user; one PDF layout.
@@ -371,6 +374,8 @@ The full launch-readiness list (what's complete, what still needs work, remainin
 **"node:sqlite" or "No such built-in module"** — Your Node.js is too old. Install Node 22.13+ (or 24).
 
 **Port 5173 is already in use** — Another copy is running. Close it, or use the address Vite prints.
+
+**"The local database in data/pglite is already open in another program"** — `npm run dev` and `npm start` (or `npm run backup`) can't use the local database at the same time. Stop the other one. If nothing else is running, delete `data/pglite.lock`.
 
 **Job Search says it isn't set up** — Check `JSEARCH_API_KEY` in `.env` (file named exactly `.env`, no quotes/spaces), then restart `npm run dev`. The terminal's first lines say which integrations are on.
 

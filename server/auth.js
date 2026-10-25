@@ -107,23 +107,22 @@ export function createAuth({ db, env = {}, log = console, beforeDeleteUser }) {
   const resetLimiter = new RateLimiter({ limit: 5, windowMs: 60 * 60 * 1000 });
 
   const q = {
-    userByEmail: db.prepare('SELECT * FROM users WHERE email = ?'),
-    userById: db.prepare('SELECT * FROM users WHERE id = ?'),
-    insertUser: db.prepare('INSERT INTO users (id, email, password_hash, created_at, password_changed_at) VALUES (?, ?, ?, ?, ?)'),
-    setPassword: db.prepare('UPDATE users SET password_hash = ?, password_changed_at = ? WHERE id = ?'),
-    deleteUser: db.prepare('DELETE FROM users WHERE id = ?'),
-    insertSession: db.prepare('INSERT INTO sessions (token_hash, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)'),
-    sessionUser: db.prepare(
-      'SELECT users.id, users.email, users.created_at FROM sessions JOIN users ON users.id = sessions.user_id WHERE sessions.token_hash = ? AND sessions.expires_at > ?',
-    ),
-    deleteSession: db.prepare('DELETE FROM sessions WHERE token_hash = ?'),
-    deleteUserSessions: db.prepare('DELETE FROM sessions WHERE user_id = ?'),
-    deleteOtherSessions: db.prepare('DELETE FROM sessions WHERE user_id = ? AND token_hash != ?'),
-    purgeSessions: db.prepare('DELETE FROM sessions WHERE expires_at <= ?'),
-    insertReset: db.prepare('INSERT INTO password_resets (token_hash, user_id, expires_at) VALUES (?, ?, ?)'),
-    resetByToken: db.prepare('SELECT * FROM password_resets WHERE token_hash = ?'),
-    useReset: db.prepare('UPDATE password_resets SET used_at = ? WHERE token_hash = ?'),
-    deleteUserResets: db.prepare('DELETE FROM password_resets WHERE user_id = ?'),
+    userByEmail: (email) => db.one('SELECT * FROM users WHERE email = $1', [email]),
+    userById: (id) => db.one('SELECT * FROM users WHERE id = $1', [id]),
+    insertUser: (...p) => db.run('INSERT INTO users (id, email, password_hash, created_at, password_changed_at) VALUES ($1, $2, $3, $4, $5)', p),
+    setPassword: (...p) => db.run('UPDATE users SET password_hash = $1, password_changed_at = $2 WHERE id = $3', p),
+    deleteUser: (id) => db.run('DELETE FROM users WHERE id = $1', [id]),
+    insertSession: (...p) => db.run('INSERT INTO sessions (token_hash, user_id, created_at, expires_at) VALUES ($1, $2, $3, $4)', p),
+    sessionUser: (...p) =>
+      db.one('SELECT users.id, users.email, users.created_at FROM sessions JOIN users ON users.id = sessions.user_id WHERE sessions.token_hash = $1 AND sessions.expires_at > $2', p),
+    deleteSession: (hash) => db.run('DELETE FROM sessions WHERE token_hash = $1', [hash]),
+    deleteUserSessions: (id) => db.run('DELETE FROM sessions WHERE user_id = $1', [id]),
+    deleteOtherSessions: (...p) => db.run('DELETE FROM sessions WHERE user_id = $1 AND token_hash != $2', p),
+    purgeSessions: (now) => db.run('DELETE FROM sessions WHERE expires_at <= $1', [now]),
+    insertReset: (...p) => db.run('INSERT INTO password_resets (token_hash, user_id, expires_at) VALUES ($1, $2, $3)', p),
+    resetByToken: (hash) => db.one('SELECT * FROM password_resets WHERE token_hash = $1', [hash]),
+    useReset: (...p) => db.run('UPDATE password_resets SET used_at = $1 WHERE token_hash = $2', p),
+    deleteUserResets: (id) => db.run('DELETE FROM password_resets WHERE user_id = $1', [id]),
   };
 
   // A fixed hash so a sign-in for an unknown email takes as long as a real one.
@@ -131,12 +130,12 @@ export function createAuth({ db, env = {}, log = console, beforeDeleteUser }) {
 
   const publicUser = (u) => ({ id: u.id, email: u.email, createdAt: u.created_at });
 
-  function startSession(res, userId) {
+  async function startSession(res, userId) {
     const token = newToken();
     const now = new Date();
     const expires = new Date(now.getTime() + SESSION_DAYS * 86400000);
-    q.insertSession.run(sha256(token), userId, now.toISOString(), expires.toISOString());
-    if (Math.random() < 0.05) q.purgeSessions.run(now.toISOString());
+    await q.insertSession(sha256(token), userId, now.toISOString(), expires.toISOString());
+    if (Math.random() < 0.05) await q.purgeSessions(now.toISOString());
     res.setHeader('Set-Cookie', serializeCookie(COOKIE, token, { maxAge: SESSION_DAYS * 86400, secure: secureCookie }));
     return token;
   }
@@ -150,15 +149,15 @@ export function createAuth({ db, env = {}, log = console, beforeDeleteUser }) {
   }
 
   // Returns the signed-in user for a request, or null.
-  function getUser(req) {
+  async function getUser(req) {
     const token = sessionToken(req);
     if (!token || token.length > 100) return null;
-    const row = q.sessionUser.get(sha256(token), new Date().toISOString());
+    const row = await q.sessionUser(sha256(token), new Date().toISOString());
     return row ? publicUser(row) : null;
   }
 
-  function requireUser(req) {
-    const user = getUser(req);
+  async function requireUser(req) {
+    const user = await getUser(req);
     if (!user) throw new HttpError(401, 'Please sign in again.', 'auth_required');
     return user;
   }
@@ -176,7 +175,7 @@ export function createAuth({ db, env = {}, log = console, beforeDeleteUser }) {
   }
 
   const routes = {
-    'GET /me': async (req, res) => send(res, 200, { user: getUser(req), passwordReset: emailConfigured ? 'email' : devResetLinks ? 'console' : 'unavailable' }),
+    'GET /me': async (req, res) => send(res, 200, { user: await getUser(req), passwordReset: emailConfigured ? 'email' : devResetLinks ? 'console' : 'unavailable' }),
 
     'POST /signup': async (req, res) => {
       limit(signupLimiter, clientIp(req, trustProxy));
@@ -186,12 +185,18 @@ export function createAuth({ db, env = {}, log = console, beforeDeleteUser }) {
       if (emailError) throw new HttpError(400, emailError, 'invalid_email');
       const passwordError = validatePassword(body.password, email);
       if (passwordError) throw new HttpError(400, passwordError, 'weak_password');
-      if (q.userByEmail.get(email)) throw new HttpError(409, 'An account with this email already exists. Sign in instead.', 'email_taken');
+      if (await q.userByEmail(email)) throw new HttpError(409, 'An account with this email already exists. Sign in instead.', 'email_taken');
       const now = new Date().toISOString();
       const id = randomUUID();
-      q.insertUser.run(id, email, await hashPassword(String(body.password)), now, now);
-      startSession(res, id);
-      return send(res, 201, { user: publicUser(q.userById.get(id)) });
+      try {
+        await q.insertUser(id, email, await hashPassword(String(body.password)), now, now);
+      } catch (err) {
+        // Two sign-ups for the same email at once: the database's unique rule decides.
+        if (err.code === '23505') throw new HttpError(409, 'An account with this email already exists. Sign in instead.', 'email_taken');
+        throw err;
+      }
+      await startSession(res, id);
+      return send(res, 201, { user: publicUser(await q.userById(id)) });
     },
 
     'POST /signin': async (req, res) => {
@@ -201,16 +206,16 @@ export function createAuth({ db, env = {}, log = console, beforeDeleteUser }) {
       const password = String(body.password || '');
       if (validateEmail(email) || !password) throw new HttpError(400, 'Enter your email and password.', 'invalid_input');
       limit(emailLimiter, email);
-      const user = q.userByEmail.get(email);
+      const user = await q.userByEmail(email);
       const ok = await verifyPassword(password.slice(0, 200), user ? user.password_hash : await dummyHash);
       if (!user || !ok) throw new HttpError(401, 'Email or password is incorrect.', 'invalid_credentials');
-      startSession(res, user.id);
+      await startSession(res, user.id);
       return send(res, 200, { user: publicUser(user) });
     },
 
     'POST /signout': async (req, res) => {
       const token = sessionToken(req);
-      if (token) q.deleteSession.run(sha256(token));
+      if (token) await q.deleteSession(sha256(token));
       clearCookie(res);
       return send(res, 200, { ok: true });
     },
@@ -226,10 +231,10 @@ export function createAuth({ db, env = {}, log = console, beforeDeleteUser }) {
       }
       if (!base) throw new HttpError(501, 'Password reset needs APP_URL to be set on the server.', 'reset_unavailable');
       limit(emailLimiter, `reset:${email}`);
-      const user = q.userByEmail.get(email);
+      const user = await q.userByEmail(email);
       if (user) {
         const token = newToken();
-        q.insertReset.run(sha256(token), user.id, new Date(Date.now() + RESET_MINUTES * 60000).toISOString());
+        await q.insertReset(sha256(token), user.id, new Date(Date.now() + RESET_MINUTES * 60000).toISOString());
         const link = `${base}/reset-password?token=${token}`;
         if (emailConfigured) {
           try {
@@ -255,47 +260,47 @@ export function createAuth({ db, env = {}, log = console, beforeDeleteUser }) {
       limit(ipLimiter, clientIp(req, trustProxy));
       const body = await readJson(req, 10000);
       const token = String(body.token || '');
-      const row = token && token.length < 100 ? q.resetByToken.get(sha256(token)) : null;
+      const row = token && token.length < 100 ? await q.resetByToken(sha256(token)) : null;
       if (!row || row.used_at || row.expires_at <= new Date().toISOString()) {
         throw new HttpError(400, 'This reset link is invalid or has expired. Ask for a new one.', 'invalid_token');
       }
-      const user = q.userById.get(row.user_id);
+      const user = await q.userById(row.user_id);
       const passwordError = validatePassword(body.password, user?.email);
       if (passwordError) throw new HttpError(400, passwordError, 'weak_password');
       const now = new Date().toISOString();
-      q.setPassword.run(await hashPassword(String(body.password)), now, user.id);
-      q.useReset.run(now, row.token_hash);
-      q.deleteUserResets.run(user.id);
-      q.deleteUserSessions.run(user.id); // Sign out everywhere else.
-      startSession(res, user.id);
+      await q.setPassword(await hashPassword(String(body.password)), now, user.id);
+      await q.useReset(now, row.token_hash);
+      await q.deleteUserResets(user.id);
+      await q.deleteUserSessions(user.id); // Sign out everywhere else.
+      await startSession(res, user.id);
       return send(res, 200, { user: publicUser(user) });
     },
 
     'POST /change-password': async (req, res) => {
-      const user = requireUser(req);
+      const user = await requireUser(req);
       limit(emailLimiter, `change:${user.id}`);
       const body = await readJson(req, 10000);
-      const row = q.userById.get(user.id);
+      const row = await q.userById(user.id);
       if (!(await verifyPassword(String(body.currentPassword || '').slice(0, 200), row.password_hash))) {
         throw new HttpError(400, 'Your current password is incorrect.', 'invalid_credentials');
       }
       const passwordError = validatePassword(body.newPassword, row.email);
       if (passwordError) throw new HttpError(400, passwordError, 'weak_password');
-      q.setPassword.run(await hashPassword(String(body.newPassword)), new Date().toISOString(), user.id);
-      q.deleteOtherSessions.run(user.id, sha256(sessionToken(req)));
+      await q.setPassword(await hashPassword(String(body.newPassword)), new Date().toISOString(), user.id);
+      await q.deleteOtherSessions(user.id, sha256(sessionToken(req)));
       return send(res, 200, { ok: true });
     },
 
     'POST /delete-account': async (req, res) => {
-      const user = requireUser(req);
+      const user = await requireUser(req);
       limit(emailLimiter, `delete:${user.id}`);
       const body = await readJson(req, 10000);
-      const row = q.userById.get(user.id);
+      const row = await q.userById(user.id);
       if (!(await verifyPassword(String(body.password || '').slice(0, 200), row.password_hash))) {
         throw new HttpError(400, 'Your password is incorrect.', 'invalid_credentials');
       }
       await beforeDeleteUser?.(user.id);
-      q.deleteUser.run(user.id); // Sessions, resets and saved data are deleted with it.
+      await q.deleteUser(user.id); // Sessions, resets and saved data are deleted with it.
       clearCookie(res);
       return send(res, 200, { ok: true });
     },

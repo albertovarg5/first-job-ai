@@ -243,11 +243,11 @@ export function createJobsHandler(env = {}, { usage = memoryUsageStore() } = {})
     const cached = fromCache(key);
     if (cached) return { ...cached, cached: true };
 
-    if (monthlyLimit && usage.count(monthKey(), 'jsearch') >= monthlyLimit) throw new HttpError(429, ERRORS.localLimit, 'local_limit');
+    if (monthlyLimit && (await usage.count(monthKey(), 'jsearch')) >= monthlyLimit) throw new HttpError(429, ERRORS.localLimit, 'local_limit');
 
     let response;
     try {
-      usage.increment(monthKey(), 'jsearch');
+      await usage.increment(monthKey(), 'jsearch');
       response = await fetch(buildJSearchUrl(p, { provider, baseUrl }), {
         headers: { Accept: 'application/json', ...PROVIDERS[provider].headers(apiKey, host) },
         signal: AbortSignal.timeout(20000),
@@ -283,7 +283,7 @@ export function createJobsHandler(env = {}, { usage = memoryUsageStore() } = {})
         provider: apiKey ? PROVIDERS[provider].label : null,
         country: defaultCountry,
         monthlyLimit: monthlyLimit || null,
-        usedThisMonth: usage.count(monthKey(), 'jsearch'),
+        usedThisMonth: await usage.count(monthKey(), 'jsearch'),
         providerRemaining: Number.isFinite(lastRemaining) ? lastRemaining : null,
       });
     }

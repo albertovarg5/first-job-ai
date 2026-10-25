@@ -37,37 +37,32 @@ export function nextResetDate(now = new Date()) {
 // against their allowance for answers they actually received.
 export function createAiQuota(db, env = {}, { now = () => new Date(), planOf } = {}) {
   const limits = planLimits(env);
-  const q = {
-    ensure: db.prepare('INSERT INTO ai_usage (user_id, period, count) VALUES (?, ?, 0) ON CONFLICT(user_id, period) DO NOTHING'),
-    take: db.prepare('UPDATE ai_usage SET count = count + 1 WHERE user_id = ? AND period = ? AND count < ?'),
-    refund: db.prepare('UPDATE ai_usage SET count = count - 1 WHERE user_id = ? AND period = ? AND count > 0'),
-    used: db.prepare('SELECT count FROM ai_usage WHERE user_id = ? AND period = ?'),
-  };
-
-  function usage(userId) {
-    const current = planOf?.(userId, now());
+  async function usage(userId) {
+    const current = await planOf?.(userId, now());
     const plan = PLANS[current] ? current : 'free';
     const period = currentPeriod(now());
+    const row = await db.one('SELECT count FROM ai_usage WHERE user_id = $1 AND period = $2', [userId, period]);
     return {
       plan,
       planLabel: PLANS[plan].label,
-      used: q.used.get(userId, period)?.count || 0,
+      used: row?.count || 0,
       limit: limits[plan],
       resetsOn: nextResetDate(now()),
     };
   }
 
-  // Returns { ok: true, period } or { ok: false, usage }.
-  function reserve(userId) {
-    const u = usage(userId);
+  // Returns { ok: true, period } or { ok: false, usage }. The UPDATE is atomic,
+  // so parallel requests can never go over the limit.
+  async function reserve(userId) {
+    const u = await usage(userId);
     const period = currentPeriod(now());
-    q.ensure.run(userId, period);
-    if (q.take.run(userId, period, u.limit).changes === 1) return { ok: true, period };
+    await db.run('INSERT INTO ai_usage (user_id, period, count) VALUES ($1, $2, 0) ON CONFLICT (user_id, period) DO NOTHING', [userId, period]);
+    if ((await db.run('UPDATE ai_usage SET count = count + 1 WHERE user_id = $1 AND period = $2 AND count < $3', [userId, period, u.limit])) === 1) return { ok: true, period };
     return { ok: false, usage: u };
   }
 
   function refund(userId, period) {
-    q.refund.run(userId, period);
+    return db.run('UPDATE ai_usage SET count = count - 1 WHERE user_id = $1 AND period = $2 AND count > 0', [userId, period]);
   }
 
   return { usage, reserve, refund };

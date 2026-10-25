@@ -14,7 +14,7 @@ Last updated: October 2026.
 | **JSearch** (OpenWeb Ninja or RapidAPI) | Real job listings | Optional (Job Search shows setup steps without it) | Free tier, then monthly plans by number of requests | app.openwebninja.com or rapidapi.com |
 | **Stripe** | Premium subscriptions (Checkout, Billing, customer portal) | Optional (without it every account is Free) | A fee per successful payment, no monthly fee | dashboard.stripe.com |
 | **Resend** | Password-reset emails | Required in production for password reset | Free tier, then monthly plans | resend.com (needs a verified sending domain) |
-| **Hosting with a persistent disk** | Runs `npm start` and keeps the SQLite file | Required to go live | Monthly | For example Render, Railway or Fly.io, or a small VPS |
+| **Hosting** | Vercel serves the app; Railway runs `npm start` (API) and PostgreSQL | Required to go live | Monthly | Vercel Hobby is free for personal use (Pro for commercial use); Railway bills by usage |
 | **Domain name + HTTPS** | Public address, secure cookies | Required to go live | Yearly | Any registrar; most hosts provide HTTPS |
 
 Deployment steps are in the README under **Deployment**.
@@ -26,7 +26,7 @@ Deployment steps are in the README under **Deployment**.
 These features work end to end and are covered by automated tests. The application workflow was also checked in a real browser, on desktop and on a phone-sized screen.
 
 - **Accounts:** sign up, sign in, sign out, password reset (email in production; link printed in the terminal during development), change password, delete account.
-- **Private data:** each user's tracker, saved jobs, resume, letters and practice sessions are stored in SQLite and can only be read with that user's session. The data survives a refresh, signing out and back in, and a server restart.
+- **Private data:** each user's tracker, saved jobs, resume, letters and practice sessions are stored in PostgreSQL and can only be read with that user's session. The data survives a refresh, signing out and back in, and a server restart.
 - **Real job search** through JSearch: title, location, remote, job type, date posted, experience and country filters. Includes paging, caching and a monthly request cap. The app never shows made-up listings, and it explains a missing key, a rejected key, rate limits and empty results.
 - **Saved jobs and tracker:** six statuses, status history, dates, notes, interview times, duplicate protection, and list and board views.
 - **Application workspace** (`/tracker/<id>`): a guided path for one job with a single clear next step:
@@ -59,7 +59,7 @@ Listed in rough priority order for a public launch:
 2. **A real Stripe test-mode run-through.** The payment code is finished and tested with a simulated Stripe, but it has not yet run against a real Stripe test-mode account. Follow "Premium subscriptions (Stripe)" in the README, including cancellation, a failed payment, a refund and a dispute, before charging anyone.
 3. **Terms of Service and Privacy Policy pages.** Required before collecting real users' resumes. Have them reviewed for your country.
 4. **Error monitoring and uptime alerts.** For example Sentry and an uptime checker. Today, errors only appear in the server log.
-5. **Database backups.** The SQLite file needs scheduled off-site backups.
+5. **Database backups.** Turn on Railway's Postgres backups and keep an off-site copy with `npm run backup`.
 6. **Analytics.** There is no measurement of which steps users finish, so you can't yet tell which features are valuable enough to charge for (see section 5).
 7. **Code splitting.** The JavaScript bundle is about 490 KB, which is slower to load on phones.
 8. **One resume per user and one PDF layout.** Users applying to different kinds of jobs may want several versions.
@@ -75,8 +75,8 @@ The basics are in place: passwords are hashed with scrypt, session tokens are st
 | Rate limits and AI counters for guests are in memory | Limits reset on restart and don't work across several servers | Run one instance, or move limits to Redis |
 | If `API_REQUIRE_AUTH=false` in production, guests have no monthly AI cap (only the rate limiter) | Your Anthropic bill | Keep the default (`true`) in production |
 | No account lockout beyond rate limits, and no two-factor sign-in | Password guessing on weak passwords | Fine for launch; add 2FA later |
-| Resumes and job notes are stored unencrypted in SQLite | A stolen server disk exposes personal data | Use your host's disk encryption, restrict server access, back up to encrypted storage |
-| SQLite via `node:sqlite` is marked experimental by Node.js | A future Node version could change it | Pin the Node version on your host (22.13+ or 24) |
+| Resumes and job notes are stored unencrypted in PostgreSQL | A leaked database password exposes personal data | Keep `DATABASE_URL` only in Railway, restrict access, store backups encrypted |
+| Backups and the import use `node:sqlite`, marked experimental by Node.js | A future Node version could change it | Pin the Node version on your host (22.13+ or 24) |
 | No automated dependency scanning | Vulnerable packages could go unnoticed | Run `npm audit` before each deploy, or turn on GitHub Dependabot |
 | Stripe objects created by hand in the Dashboard (not through the app) are ignored | A subscription you create manually won't give anyone Premium | Always let users subscribe through the app's Upgrade button |
 | A user could open Checkout in two browsers at the exact same moment | In rare cases, two subscriptions | The app closes other open checkouts and refuses a second purchase, but two clicks within the same second could both get through. Check Stripe's Subscriptions list and refund any duplicate |
@@ -122,7 +122,7 @@ This uses Stripe's standard US pricing: 2.9% + $0.30 per successful card payment
 
 Example: 100 monthly subscribers bring in about **$933 a month** after Stripe fees. That is not profit. Still to subtract:
 - **AI usage:** about $0.02–0.05 per request, so up to roughly $4–10 for a Premium user who uses all 200, and up to about $0.40–1.00 for an active Free user.
-- **Hosting:** Render at roughly $7–8 a month at launch, plus the domain (about $10–15 a year).
+- **Hosting:** Railway (backend + PostgreSQL, usage-based, check railway.com/pricing) and Vercel (check vercel.com/pricing; commercial use needs Pro), plus the domain (about $10–15 a year).
 - **Other services:** JSearch and Resend plans, if you go beyond their free tiers.
 - **Refunds, disputes and chargeback fees.**
 - **Sales tax or VAT** you collect and pass on, and **income tax** on the profit.
@@ -154,7 +154,7 @@ AI cost per request depends on the model and the length of the resume and postin
 ## 6. Launch checklist
 
 - [ ] Rotate any API key that was ever pasted in a chat, screenshot or commit, and keep the new keys only in the host's environment settings.
-- [ ] Deploy with `NODE_ENV=production`, HTTPS, `APP_URL`, `RESEND_API_KEY`, `EMAIL_FROM`, and `DATABASE_PATH` on a persistent disk.
+- [ ] Deploy with `NODE_ENV=production`, HTTPS, `APP_URL`, `RESEND_API_KEY`, `EMAIL_FROM`, and `DATABASE_URL` (PostgreSQL).
 - [ ] Set `JSEARCH_MONTHLY_LIMIT` to your JSearch plan's allowance.
 - [ ] Set `AI_FREE_MONTHLY_LIMIT` to what you can afford per user.
 - [ ] Set a monthly spend limit in the Anthropic Console.

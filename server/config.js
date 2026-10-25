@@ -7,7 +7,7 @@ import { COUNTRIES, PROVIDERS, resolveProvider } from './jobsHandler.js';
 import { isProduction } from './http.js';
 import { billingConfig } from './billing.js';
 
-const SECRET_NAMES = ['ANTHROPIC_API_KEY', 'JSEARCH_API_KEY', 'RAPIDAPI_KEY', 'RESEND_API_KEY', 'STRIPE_SECRET_KEY', 'STRIPE_WEBHOOK_SECRET'];
+const SECRET_NAMES = ['DATABASE_URL', 'ANTHROPIC_API_KEY', 'JSEARCH_API_KEY', 'RAPIDAPI_KEY', 'RESEND_API_KEY', 'STRIPE_SECRET_KEY', 'STRIPE_WEBHOOK_SECRET'];
 const blank = (v) => v === undefined || v === null || String(v).trim() === '';
 
 // Returns { errors: string[], warnings: string[], features: { ai, jobs, email } }.
@@ -94,9 +94,13 @@ export function checkConfig(env = {}) {
     if (blank(env.APP_URL)) warnings.push('APP_URL is not set: password reset is turned off in production. Set it to the public https:// address of the site.');
     else if (!/^https:\/\//.test(String(env.APP_URL).trim())) warnings.push('APP_URL should start with https:// in production.');
     if (!hasResendKey || !hasFrom) warnings.push('RESEND_API_KEY / EMAIL_FROM are not both set: password reset is turned off in production.');
-    // Accounts and subscriptions live in this file, so it must be on storage that survives redeploys.
-    if (blank(env.DATABASE_PATH) || !/^(\/|[A-Za-z]:[\\/])/.test(String(env.DATABASE_PATH).trim())) {
-      warnings.push('DATABASE_PATH is not an absolute path. On hosts like Render, files outside the persistent disk are erased on every deploy, which would delete all accounts and subscriptions. Set it to a file on the disk, e.g. /var/data/first-job-ai.db.');
+    // Accounts and subscriptions must live in a real database: the app's own disk is erased on every deploy.
+    // On a host (Railway sets RAILWAY_PROJECT_ID) that is fatal; `npm start` on your own computer may use the local database.
+    if (blank(env.DATABASE_URL)) {
+      const msg = 'DATABASE_URL is not set, so the local development database (data/pglite) is used. On a server the app needs PostgreSQL (on Railway: reference the Postgres service’s DATABASE_URL).';
+      (blank(env.RAILWAY_PROJECT_ID) ? warnings : errors).push(msg);
+    } else if (!/^postgres(ql)?:\/\//i.test(String(env.DATABASE_URL).trim())) {
+      errors.push('DATABASE_URL must start with postgresql:// (copy it from the Postgres service’s Variables tab).');
     }
   }
 

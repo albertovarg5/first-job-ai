@@ -1,18 +1,19 @@
 // Makes one database backup now: npm run backup
-// On Render, run it from the service's Shell tab (the disk is only reachable there).
+// Backs up DATABASE_URL (from the environment or .env), or the local
+// development database when it isn't set. Writes a SQLite snapshot file to
+// BACKUP_DIR (default data/backups), restorable with npm run db:import.
+// Run it on your own computer with DATABASE_URL set to Railway's public
+// Postgres address to keep a copy of production outside Railway.
 import { existsSync } from 'node:fs';
-import { DatabaseSync } from 'node:sqlite';
 import { backupDatabase, backupSettings } from '../server/backup.js';
+import { describeTarget, openDatabase } from '../server/db.js';
 
 if (existsSync('.env')) process.loadEnvFile('.env');
-const settings = backupSettings(process.env);
-if (!existsSync(settings.dbPath)) {
-  console.error(`No database at ${settings.dbPath}. Check DATABASE_PATH.`);
-  process.exit(1);
-}
-const db = new DatabaseSync(settings.dbPath, { readOnly: true });
+const target = process.env.DATABASE_URL || 'data/pglite';
+console.log(`Database: ${describeTarget(target)}`);
+const db = await openDatabase(target);
 try {
-  console.log(`Backup written: ${backupDatabase(db, settings)}`);
+  console.log(`Backup written: ${await backupDatabase(db, backupSettings(process.env))}`);
 } finally {
-  db.close();
+  await db.close();
 }

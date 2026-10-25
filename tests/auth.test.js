@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createApi, sameOriginJson } from '../server/api.js';
 import { hashPassword, validatePassword, verifyPassword } from '../server/auth.js';
-import { openDatabase } from '../server/db.js';
+import { MIGRATIONS, openDatabase } from '../server/db.js';
 import { sanitizeUserData } from '../server/dataHandler.js';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -121,6 +121,15 @@ test('cross-site and non-JSON writes are blocked', async () => {
   assert.equal(sameOriginJson({ method: 'POST', headers: { 'content-type': 'text/plain', host: 'h' } }), false);
   assert.equal(sameOriginJson({ method: 'POST', headers: { 'content-type': 'application/json', host: 'h', origin: 'http://h' } }), true);
   assert.equal(sameOriginJson({ method: 'GET', headers: {} }), true);
+  // Behind the Vercel proxy the browser's Origin is the site (APP_URL), not this server's Host.
+  const proxied = { method: 'POST', headers: { 'content-type': 'application/json', host: 'api.up.railway.app', origin: 'https://firstjob.example' } };
+  assert.equal(sameOriginJson(proxied, 'https://firstjob.example'), true);
+  assert.equal(sameOriginJson(proxied), false);
+  assert.equal(sameOriginJson({ ...proxied, headers: { ...proxied.headers, origin: 'https://evil.example' } }, 'https://firstjob.example'), false);
+  const { api: behindProxy } = await setup({ APP_URL: 'https://firstjob.example' });
+  const viaSite = await call(behindProxy, 'POST', '/auth/signup', { email: 'proxy@example.com', password: 'through the proxy' }, { headers: { host: 'api.up.railway.app', origin: 'https://firstjob.example' } });
+  assert.equal(viaSite.status, 201);
+  assert.equal((await call(behindProxy, 'POST', '/auth/signin', { email: 'proxy@example.com', password: 'through the proxy' }, { headers: { origin: 'https://evil.example' } })).status, 403);
 });
 
 test('password reset: token works once, signs out other sessions', async () => {
@@ -177,13 +186,14 @@ test('migrations run once and data survives reopening the database', async () =>
   const file = join(dir, 'test.db');
   try {
     const first = await openDatabase(file);
-    first.prepare("INSERT INTO users (id, email, password_hash, created_at, password_changed_at) VALUES ('u', 'e@x.co', 'h', 'now', 'now')").run();
-    first.close();
+    await first.run("INSERT INTO users (id, email, password_hash, created_at, password_changed_at) VALUES ('u', 'e@x.co', 'h', 'now', 'now')");
+    await first.close();
     const second = await openDatabase(file);
-    assert.equal(second.prepare('SELECT version FROM schema_version').get().version, 3);
-    assert.equal(second.prepare('SELECT email FROM users').get().email, 'e@x.co');
-    assert.equal(second.prepare('SELECT plan FROM users').get().plan, 'free', 'existing users start on the free plan');
-    second.close();
+    assert.equal((await second.one('SELECT version FROM schema_version')).version, MIGRATIONS.length);
+    assert.equal((await second.all('SELECT * FROM schema_version')).length, 1);
+    assert.equal((await second.one('SELECT email FROM users')).email, 'e@x.co');
+    assert.equal((await second.one('SELECT plan FROM users')).plan, 'free', 'existing users start on the free plan');
+    await second.close();
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

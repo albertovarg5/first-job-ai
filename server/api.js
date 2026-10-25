@@ -13,8 +13,10 @@ import { RateLimiter, clientIp, envFlag, isProduction, pathOf, proxySettings, ra
 
 // State-changing requests must be JSON and, when the browser says where they
 // came from, come from this site. Together with SameSite cookies this blocks
-// cross-site request forgery.
-export function sameOriginJson(req) {
+// cross-site request forgery. appUrl: the public site (APP_URL). When the
+// frontend is on another host (Vercel) that forwards /api here, the browser's
+// Origin is that site, not this server's Host.
+export function sameOriginJson(req, appUrl = '') {
   // Stripe webhooks come from Stripe's servers and are authenticated by their signature instead.
   if (req.method === 'POST' && pathOf(req) === '/billing/webhook') return true;
   if (req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS') return true;
@@ -23,14 +25,15 @@ export function sameOriginJson(req) {
   const origin = req.headers?.origin;
   if (!origin) return true;
   try {
-    return new URL(origin).host === req.headers.host;
+    const from = new URL(origin);
+    return from.host === req.headers.host || (appUrl !== '' && from.origin === appUrl);
   } catch {
     return false;
   }
 }
 
 async function build(env, options) {
-  const db = options.db || (await openDatabase(env.DATABASE_PATH || 'data/first-job-ai.db'));
+  const db = options.db || (await openDatabase(env.DATABASE_URL || 'data/pglite'));
   const trustProxy = proxySettings(env);
   // AI and job search use paid API keys, so on a public server only
   // signed-in users may call them (set API_REQUIRE_AUTH=false to allow guests).
@@ -75,10 +78,16 @@ async function build(env, options) {
 
 export function createApi(env = {}, options = {}) {
   let ready;
+  let appOrigin = '';
+  try {
+    appOrigin = env.APP_URL ? new URL(String(env.APP_URL).trim()).origin : '';
+  } catch {
+    /* an invalid APP_URL is reported by checkConfig */
+  }
 
   // Connect-style middleware mounted at /api.
   async function api(req, res) {
-    if (!sameOriginJson(req)) {
+    if (!sameOriginJson(req, appOrigin)) {
       return send(res, 403, { error: 'This request was blocked for security reasons.', code: 'forbidden' });
     }
     let app;
@@ -88,7 +97,7 @@ export function createApi(env = {}, options = {}) {
     } catch (err) {
       ready = undefined;
       (options.log || console).error?.('[api] Could not open the database:', err);
-      return send(res, 500, { error: 'The server could not open its database. Check DATABASE_PATH and the server logs.', code: 'db_unavailable' });
+      return send(res, 500, { error: 'The server could not open its database. Check DATABASE_URL and the server logs.', code: 'db_unavailable' });
     }
     const full = pathOf(req);
     if (full === '/config' && req.method === 'GET') {
@@ -96,8 +105,8 @@ export function createApi(env = {}, options = {}) {
     }
     // Plan and AI allowance of the signed-in user.
     if (full === '/usage' && req.method === 'GET') {
-      const user = app.getUser(req);
-      return send(res, 200, user ? { signedIn: true, ai: app.quota.usage(user.id) } : { signedIn: false, ai: null });
+      const user = await app.getUser(req);
+      return send(res, 200, user ? { signedIn: true, ai: await app.quota.usage(user.id) } : { signedIn: false, ai: null });
     }
     for (const [prefix, handler, gate, metered] of app.mounts) {
       if (full !== prefix && !full.startsWith(`${prefix}/`)) continue;
@@ -108,14 +117,14 @@ export function createApi(env = {}, options = {}) {
       let succeeded = false;
       try {
         if (gate) {
-          user = app.getUser(req);
+          user = await app.getUser(req);
           const blocked = gate(req, user);
           if (Array.isArray(blocked)) return send(res, ...blocked);
           if (blocked) return rateLimited(res, blocked.retryAfter);
         }
         // Guests (only allowed when API_REQUIRE_AUTH is off) are limited by the rate limiter alone.
         if (metered?.(req) && user) {
-          reservation = app.quota.reserve(user.id);
+          reservation = await app.quota.reserve(user.id);
           if (!reservation.ok) {
             const usage = reservation.usage;
             reservation = null;
@@ -127,7 +136,7 @@ export function createApi(env = {}, options = {}) {
         succeeded = res.statusCode === 200;
         return result;
       } finally {
-        if (reservation && !succeeded) app.quota.refund(user.id, reservation.period);
+        if (reservation && !succeeded) await app.quota.refund(user.id, reservation.period);
         req.url = originalUrl;
       }
     }
@@ -138,13 +147,13 @@ export function createApi(env = {}, options = {}) {
   // For health checks: throws if the database can't be read.
   api.health = async () => {
     const app = await api.ready();
-    app.db.prepare('SELECT 1').get();
+    await app.db.one('SELECT 1');
   };
-  // Writes a consistent copy of the database (see server/backup.js).
+  // Writes a snapshot of the database to a file (see server/backup.js).
   api.backup = async (settings) => backupDatabase((await api.ready()).db, settings);
   // Closes the database cleanly (on shutdown).
   api.close = async () => {
-    if (ready) (await ready).db.close();
+    if (ready) await (await ready).db.close();
   };
   return api;
 }

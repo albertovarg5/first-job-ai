@@ -100,7 +100,7 @@ function hostedUrl(url, host) {
 
 export function createBilling({ db, env = {}, requireUser, stripe, log = console, now = () => new Date() }) {
   const config = billingConfig(env);
-  const store = createBillingStore(db);
+  const store = createBillingStore(db, config.secretKey ? config.live : null);
   const limiter = new RateLimiter({ limit: 10, windowMs: 10 * 60 * 1000 });
   let client = stripe || null;
   const stripeClient = () => {
@@ -141,12 +141,12 @@ export function createBilling({ db, env = {}, requireUser, stripe, log = console
     return value;
   }
 
-  function statusFor(user) {
-    const rows = store.subscriptionsOf(user.id);
+  async function statusFor(user) {
+    const rows = await store.subscriptionsOf(user.id);
     const latest = rows.find((r) => isOpenStatus(r.status)) || rows[0] || null;
     return {
-      plan: store.planOf(user.id, now()),
-      canManage: Boolean(store.customerOf(user.id)),
+      plan: await store.planOf(user.id, now()),
+      canManage: Boolean(await store.customerOf(user.id)),
       subscription: latest && {
         status: latest.status,
         interval: latest.interval,
@@ -162,14 +162,14 @@ export function createBilling({ db, env = {}, requireUser, stripe, log = console
   async function syncSubscription(subscriptionId, event = null) {
     const sub = await stripeClient().subscriptions.retrieve(subscriptionId);
     const customerId = idOf(sub.customer);
-    const userId = store.userOfCustomer(customerId);
+    const userId = await store.userOfCustomer(customerId);
     if (!userId) {
       // Not created through this app (e.g. made by hand in the Dashboard). Nothing to grant.
       log.warn?.(`[billing] Ignoring subscription ${sub.id}: its customer is not linked to an account.`);
-      if (event) store.markEvent(event);
+      if (event) await store.markEvent(event);
       return null;
     }
-    store.saveSubscription({ subscriptionId: sub.id, userId, customerId, fields: subscriptionFields(sub, config.premiumPrices), event, now: now() });
+    await store.saveSubscription({ subscriptionId: sub.id, userId, customerId, fields: subscriptionFields(sub, config.premiumPrices), event, now: now() });
     return userId;
   }
 
@@ -192,16 +192,16 @@ export function createBilling({ db, env = {}, requireUser, stripe, log = console
     const chargeId = dispute ? idOf(obj.charge) : idOf(obj);
     const charge = chargeId ? await stripeClient().charges.retrieve(chargeId) : null;
     const paymentIntent = idOf(charge?.payment_intent);
-    if (!charge || !paymentIntent || (!dispute && !charge.refunded)) return store.markEvent(event);
+    if (!charge || !paymentIntent || (!dispute && !charge.refunded)) return await store.markEvent(event);
 
     const payments = await stripeClient().invoicePayments.list({ payment: { type: 'payment_intent', payment_intent: paymentIntent }, limit: 1, expand: ['data.invoice'] });
     const invoice = payments.data?.[0]?.invoice;
     const subscriptionId = idOf(invoice?.parent?.subscription_details?.subscription);
-    if (!subscriptionId) return store.markEvent(event);
+    if (!subscriptionId) return await store.markEvent(event);
 
     const sub = await stripeClient().subscriptions.retrieve(subscriptionId);
     const ends = dispute || idOf(sub.latest_invoice) === idOf(invoice);
-    if (ends && isOpenStatus(sub.status) && store.userOfCustomer(idOf(sub.customer))) {
+    if (ends && isOpenStatus(sub.status) && (await store.userOfCustomer(idOf(sub.customer)))) {
       await stripeClient().subscriptions.cancel(sub.id);
       log.warn?.(`[billing] Canceled ${sub.id} after ${dispute ? 'a dispute' : 'a full refund'} (${event.id}).`);
     }
@@ -220,12 +220,17 @@ export function createBilling({ db, env = {}, requireUser, stripe, log = console
       log.warn?.('[billing] Rejected a webhook with an invalid signature.');
       return send(res, 400, { error: 'Invalid signature.', code: 'invalid_signature' });
     }
-    if (store.eventSeen(event.id)) return send(res, 200, { received: true, duplicate: true });
+    if (await store.eventSeen(event.id)) return send(res, 200, { received: true, duplicate: true });
+    // A test-mode endpoint secret next to a live key (or the reverse). Acknowledged so Stripe stops retrying.
+    if (typeof event.livemode === 'boolean' && event.livemode !== config.live) {
+      log.warn?.(`[billing] Ignored ${event.livemode ? 'live' : 'test'}-mode event ${event.id}: STRIPE_SECRET_KEY is ${config.live ? 'live' : 'test'}. Use the webhook secret of an endpoint in the same mode.`);
+      return send(res, 200, { received: true, ignored: true });
+    }
     try {
       const subscriptionId = HANDLED_EVENTS.includes(event.type) ? subscriptionIdFrom(event) : null;
       if (MONEY_BACK_EVENTS.includes(event.type)) await handleMoneyBack(event);
       else if (subscriptionId) await syncSubscription(subscriptionId, event);
-      else store.markEvent(event);
+      else await store.markEvent(event);
       return send(res, 200, { received: true });
     } catch (err) {
       // Only ids and the error message are logged, never the payload. Stripe retries on 5xx.
@@ -235,11 +240,11 @@ export function createBilling({ db, env = {}, requireUser, stripe, log = console
   }
 
   async function customerFor(user) {
-    const existing = store.customerOf(user.id);
+    const existing = await store.customerOf(user.id);
     if (existing) return existing;
     const customer = await stripeClient().customers.create(
       { email: user.email, metadata: { user_id: user.id } },
-      { idempotencyKey: `fja-customer-${user.id}` },
+      { idempotencyKey: `fja-customer-${user.id}${config.live ? '-live' : ''}` },
     );
     return store.linkCustomer(user.id, customer.id);
   }
@@ -249,7 +254,7 @@ export function createBilling({ db, env = {}, requireUser, stripe, log = console
       const prices = config.configured ? { month: await priceInfo('month'), year: await priceInfo('year') } : { month: null, year: null };
       let user = null;
       try {
-        user = requireUser(req);
+        user = await requireUser(req);
       } catch {
         /* guests only see whether Premium exists */
       }
@@ -259,12 +264,12 @@ export function createBilling({ db, env = {}, requireUser, stripe, log = console
         prices,
         aiLimits: planLimits(env),
         signedIn: Boolean(user),
-        ...(user ? statusFor(user) : { plan: null, canManage: false, subscription: null }),
+        ...(user ? await statusFor(user) : { plan: null, canManage: false, subscription: null }),
       });
     },
 
     'POST /checkout': async (req, res) => {
-      const user = requireUser(req);
+      const user = await requireUser(req);
       limit(user);
       requireConfigured();
       const body = await readJson(req, 1000);
@@ -277,7 +282,7 @@ export function createBilling({ db, env = {}, requireUser, stripe, log = console
         throw new HttpError(503, `The ${interval === 'year' ? 'yearly' : 'monthly'} price isn’t set up correctly in Stripe, so checkout is paused. Please try again later.`, 'billing_unavailable');
       }
       // One subscription per user: anything still open must be managed in the portal instead.
-      if (store.subscriptionsOf(user.id).some((r) => isOpenStatus(r.status)) || store.planOf(user.id, now()) === 'premium') {
+      if ((await store.subscriptionsOf(user.id)).some((r) => isOpenStatus(r.status)) || (await store.planOf(user.id, now())) === 'premium') {
         throw new HttpError(409, 'You already have a subscription. Use “Manage subscription” to change or cancel it.', 'already_subscribed');
       }
       const base = appBase(env, req);
@@ -305,10 +310,10 @@ export function createBilling({ db, env = {}, requireUser, stripe, log = console
     },
 
     'POST /portal': async (req, res) => {
-      const user = requireUser(req);
+      const user = await requireUser(req);
       limit(user);
       requireConfigured();
-      const customer = store.customerOf(user.id);
+      const customer = await store.customerOf(user.id);
       if (!customer) throw new HttpError(404, 'You don’t have a subscription to manage yet.', 'no_billing_account');
       const base = appBase(env, req);
       if (!base) throw new HttpError(503, 'Billing needs APP_URL to be set on the server.', 'billing_unavailable');
@@ -332,7 +337,7 @@ export function createBilling({ db, env = {}, requireUser, stripe, log = console
     // the secret key, checks it belongs to this user, then syncs the
     // subscription. The webhook does the same thing independently.
     'POST /sync': async (req, res) => {
-      const user = requireUser(req);
+      const user = await requireUser(req);
       limit(user);
       requireConfigured();
       const body = await readJson(req, 1000);
@@ -345,13 +350,13 @@ export function createBilling({ db, env = {}, requireUser, stripe, log = console
         if (err.code === 'resource_missing') throw new HttpError(404, 'That checkout session wasn’t found.', 'not_found');
         throw err; // Stripe outage or bad key: reported as a payment service problem.
       }
-      const customer = store.customerOf(user.id);
+      const customer = await store.customerOf(user.id);
       if (session.client_reference_id !== user.id || !customer || idOf(session.customer) !== customer) {
         throw new HttpError(403, 'That checkout session belongs to another account.', 'forbidden');
       }
       const subscriptionId = session.mode === 'subscription' && session.status === 'complete' ? idOf(session.subscription) : null;
       if (subscriptionId) await syncSubscription(subscriptionId);
-      return send(res, 200, { ...statusFor(user), checkoutComplete: Boolean(subscriptionId) });
+      return send(res, 200, { ...(await statusFor(user)), checkoutComplete: Boolean(subscriptionId) });
     },
   };
 
@@ -374,7 +379,7 @@ export function createBilling({ db, env = {}, requireUser, stripe, log = console
   // Before an account is deleted, cancel anything that could still charge it.
   // If that fails the account is kept, so nobody is billed for a deleted account.
   async function cancelAllFor(userId) {
-    const open = store.subscriptionsOf(userId).filter((r) => isOpenStatus(r.status));
+    const open = (await store.subscriptionsOf(userId)).filter((r) => isOpenStatus(r.status));
     if (!open.length) return;
     if (!config.secretKey) {
       throw new HttpError(409, 'Your subscription couldn’t be canceled automatically. Cancel it under “Manage subscription” first, then delete your account.', 'subscription_active');

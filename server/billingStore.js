@@ -51,63 +51,66 @@ export function subscriptionFields(sub, premiumPrices) {
   };
 }
 
-export function createBillingStore(db) {
-  const q = {
-    customerOf: db.prepare('SELECT stripe_customer_id FROM billing_customers WHERE user_id = ?'),
-    userOfCustomer: db.prepare('SELECT user_id FROM billing_customers WHERE stripe_customer_id = ?'),
-    insertCustomer: db.prepare('INSERT INTO billing_customers (user_id, stripe_customer_id, created_at) VALUES (?, ?, ?) ON CONFLICT DO NOTHING'),
-    subscription: db.prepare('SELECT * FROM subscriptions WHERE stripe_subscription_id = ?'),
-    subscriptionsOf: db.prepare('SELECT * FROM subscriptions WHERE user_id = ? ORDER BY updated_at DESC'),
-    upsert: db.prepare(`INSERT INTO subscriptions
-        (stripe_subscription_id, user_id, stripe_customer_id, price_id, interval, plan, status, current_period_end,
-         cancel_at_period_end, cancel_at, canceled_at, ended_at, past_due_since, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(stripe_subscription_id) DO UPDATE SET
-        price_id = excluded.price_id, interval = excluded.interval, plan = excluded.plan, status = excluded.status,
-        current_period_end = excluded.current_period_end, cancel_at_period_end = excluded.cancel_at_period_end,
-        cancel_at = excluded.cancel_at, canceled_at = excluded.canceled_at, ended_at = excluded.ended_at,
-        past_due_since = excluded.past_due_since, updated_at = excluded.updated_at`),
-    eventSeen: db.prepare('SELECT 1 FROM stripe_events WHERE id = ?'),
-    markEvent: db.prepare('INSERT INTO stripe_events (id, type, processed_at) VALUES (?, ?, ?) ON CONFLICT DO NOTHING'),
-  };
+// live: true/false for the mode of the current Stripe key; only rows from that
+// mode are read. null (no key set) reads both, so paying customers keep
+// Premium if the key is ever missing.
+export function createBillingStore(db, live = null) {
+  const mode = live === null ? null : live ? 1 : 0;
+  const SUBSCRIPTIONS_OF = 'SELECT * FROM subscriptions WHERE user_id = $1 AND livemode = COALESCE($2, livemode) ORDER BY updated_at DESC';
+  const customerOf = async (userId) =>
+    (await db.one('SELECT stripe_customer_id FROM billing_customers WHERE user_id = $1 AND livemode = COALESCE($2, livemode)', [userId, mode]))?.stripe_customer_id || null;
+  const markEvent = (t, event, now = new Date()) =>
+    t.run('INSERT INTO stripe_events (id, type, processed_at) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING', [event.id, event.type, now.toISOString()]);
 
   return {
-    customerOf: (userId) => q.customerOf.get(userId)?.stripe_customer_id || null,
-    userOfCustomer: (customerId) => q.userOfCustomer.get(customerId)?.user_id || null,
-    linkCustomer(userId, customerId) {
-      q.insertCustomer.run(userId, customerId, new Date().toISOString());
-      return q.customerOf.get(userId)?.stripe_customer_id || null;
+    customerOf,
+    userOfCustomer: async (customerId) => (await db.one('SELECT user_id FROM billing_customers WHERE stripe_customer_id = $1', [customerId]))?.user_id || null,
+    async linkCustomer(userId, customerId) {
+      // A customer from the other mode is replaced; one from this mode is kept (two tabs racing).
+      await db.run(
+        `INSERT INTO billing_customers (user_id, stripe_customer_id, created_at, livemode) VALUES ($1, $2, $3, $4)
+         ON CONFLICT (user_id) DO UPDATE SET stripe_customer_id = excluded.stripe_customer_id, created_at = excluded.created_at, livemode = excluded.livemode
+         WHERE billing_customers.livemode != excluded.livemode`,
+        [userId, customerId, new Date().toISOString(), mode ?? 0],
+      );
+      return customerOf(userId);
     },
-    subscriptionsOf: (userId) => q.subscriptionsOf.all(userId),
-    eventSeen: (id) => Boolean(q.eventSeen.get(id)),
+    subscriptionsOf: (userId) => db.all(SUBSCRIPTIONS_OF, [userId, mode]),
+    eventSeen: async (id) => Boolean(await db.one('SELECT 1 FROM stripe_events WHERE id = $1', [id])),
 
     // Saves the latest state of one subscription and, when given, marks the
     // webhook event as processed in the same transaction.
     saveSubscription({ subscriptionId, userId, customerId, fields, event, now = new Date() }) {
-      db.exec('BEGIN');
-      try {
+      return db.tx(async (t) => {
         if (subscriptionId) {
-          const existing = q.subscription.get(subscriptionId);
+          const existing = await t.one('SELECT * FROM subscriptions WHERE stripe_subscription_id = $1 FOR UPDATE', [subscriptionId]);
           if (existing && existing.user_id !== userId) throw new Error(`Subscription ${subscriptionId} belongs to another user`);
           const pastDueSince = fields.status === 'past_due' ? existing?.past_due_since || now.toISOString() : null;
-          q.upsert.run(
-            subscriptionId, userId, customerId, fields.priceId, fields.interval, fields.plan, fields.status, fields.currentPeriodEnd,
-            fields.cancelAtPeriodEnd, fields.cancelAt, fields.canceledAt, fields.endedAt, pastDueSince, now.toISOString(),
+          await t.run(
+            `INSERT INTO subscriptions
+               (stripe_subscription_id, user_id, stripe_customer_id, price_id, interval, plan, status, current_period_end,
+                cancel_at_period_end, cancel_at, canceled_at, ended_at, past_due_since, updated_at, livemode)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+             ON CONFLICT (stripe_subscription_id) DO UPDATE SET
+               price_id = excluded.price_id, interval = excluded.interval, plan = excluded.plan, status = excluded.status,
+               current_period_end = excluded.current_period_end, cancel_at_period_end = excluded.cancel_at_period_end,
+               cancel_at = excluded.cancel_at, canceled_at = excluded.canceled_at, ended_at = excluded.ended_at,
+               past_due_since = excluded.past_due_since, updated_at = excluded.updated_at`,
+            [
+              subscriptionId, userId, customerId, fields.priceId, fields.interval, fields.plan, fields.status, fields.currentPeriodEnd,
+              fields.cancelAtPeriodEnd, fields.cancelAt, fields.canceledAt, fields.endedAt, pastDueSince, now.toISOString(), mode ?? 0,
+            ],
           );
         }
-        if (event) q.markEvent.run(event.id, event.type, now.toISOString());
-        db.exec('COMMIT');
-      } catch (err) {
-        db.exec('ROLLBACK');
-        throw err;
-      }
+        if (event) await markEvent(t, event, now);
+      });
     },
 
-    markEvent: (event) => q.markEvent.run(event.id, event.type, new Date().toISOString()),
+    markEvent: (event) => markEvent(db, event),
 
     // The plan a user has right now: 'premium' or 'free'.
-    planOf(userId, now = new Date()) {
-      return q.subscriptionsOf.all(userId).some((row) => grantsPremium(row, now)) ? 'premium' : 'free';
+    async planOf(userId, now = new Date()) {
+      return (await db.all(SUBSCRIPTIONS_OF, [userId, mode])).some((row) => grantsPremium(row, now)) ? 'premium' : 'free';
     },
   };
 }

@@ -1,113 +1,151 @@
-# Launching First Job AI
+# Launching First Job AI (Railway + PostgreSQL + Vercel)
 
-This guide takes First Job AI from your computer to a public website that accepts real Stripe payments. Do the steps **in order**. Real payments stay locked (`STRIPE_ALLOW_LIVE=false`) until step 7 confirms everything is set up.
+This guide takes First Job AI from your computer to a public website. Do the steps **in order**. Stripe stays in **test mode** until step 9. Real payments stay locked (`STRIPE_ALLOW_LIVE=false`) until step 10 confirms everything is set up.
 
 Steps marked **(you)** need your login, money, identity or legal decisions. Nobody else can do them.
 
 ---
 
-## 1. The hosting setup
+## 1. How the pieces fit together
 
-First Job AI is **one Node.js server** (`npm start`). It serves the website and the API from the **same address**, so:
-- there's no separate frontend URL to configure;
-- no CORS setup is needed;
-- login cookies just work.
+```
+Browser ──► Vercel (https://your-site)          React app (built from this repo)
+              │  /api/*  and  /healthz  are forwarded ──►  Railway backend (npm start)
+              │                                              │
+              │                                              └──► Railway PostgreSQL (DATABASE_URL)
+Stripe ─────────────────────────────── webhooks ──►  Railway backend /api/billing/webhook
+```
 
-Accounts, saved data and subscriptions live in **one SQLite database file**. The host must therefore:
-- run a Node process that stays on (not "serverless");
-- give it a **persistent disk** that survives restarts and redeploys.
+- The browser only ever talks to **your Vercel address**. Vercel forwards `/api/...` to Railway ([vercel.json](../vercel.json)). Login cookies therefore stay on your own site, and **no CORS setup is needed**. The backend rejects state-changing requests from any other website.
+- The backend runs **API-only** on Railway ([railway.json](../railway.json): start `npm start`, health check `/healthz`, restart if it crashes).
+- Accounts, resumes, applications, AI usage and subscriptions live in **PostgreSQL**. The backend refuses to start on Railway without `DATABASE_URL`, so data can never silently go to a temporary disk.
+- Secrets (`DATABASE_URL`, API keys, Stripe keys) exist **only in Railway's Variables**. Vercel needs **no** environment variables.
 
-**Recommended: [Render](https://render.com)**, using one web service with a 1 GB disk.
-- **Why:** it deploys straight from GitHub, includes HTTPS certificates and custom domains, has a health check, logs and a Shell, and takes daily disk snapshots. The repository already contains the setup ([render.yaml](../render.yaml)).
-- **Cost (you):** disks need a **paid** instance. The free tier can't keep a disk. At the time of writing that's roughly **$7/month** for the smallest paid instance plus about **$0.25 per GB per month** for the disk. Check the current prices at <https://render.com/pricing> before choosing.
-- **Limits:** one instance only, which is fine for launch. Each deploy has a few seconds of downtime, because the disk must move from the old instance to the new one.
-- **Alternatives** that also work: Railway (with a volume), Fly.io (with a volume), or a small VPS.
+**Costs (you):** Railway bills by usage (check <https://railway.com/pricing>). Vercel's free Hobby plan is for personal, non-commercial projects; a paid product should use Vercel Pro (check <https://vercel.com/pricing>).
 
 ---
 
 ## 2. Put the code on GitHub (you)
 
-1. Create a free account at <https://github.com>, then **New repository**:
-   - Name: `first-job-ai`
-   - Visibility: **Private**
-   - Don't add a README.
-2. In PowerShell:
+Your repository is `https://github.com/albertovarg5/first-job-ai`. In PowerShell:
+
+```powershell
+cd C:\Users\alber\Downloads\first-job-ai\first-job-ai
+git status
+```
+
+Check that `.env`, `data/` and any `.db` file are **not** listed (they're ignored on purpose). Then commit and push your branch, and merge it into `main` on GitHub (Pull request → Merge). Railway and Vercel deploy `main`.
+
+---
+
+## 3. Create the Railway project and PostgreSQL (you: account)
+
+1. Sign up at <https://railway.com> with your GitHub account and add a payment method.
+2. **New Project → Deploy from GitHub repo →** `albertovarg5/first-job-ai`. Railway creates a service for the backend and reads `railway.json`. The first deploy will **fail on purpose** (no database yet). That's expected.
+3. In the same project: **+ Create → Database → PostgreSQL**. A service called **Postgres** appears.
+4. Optional but recommended: Postgres service → **Backups** → turn on scheduled backups (if your plan offers them).
+
+---
+
+## 4. Configure the backend's variables (you)
+
+Railway → the **first-job-ai** service (not Postgres) → **Variables** → **New Variable**. Type each value directly into Railway. Never paste secrets into chat, email or Git.
+
+| Variable | Value |
+| --- | --- |
+| `DATABASE_URL` | `${{Postgres.DATABASE_URL}}`: type it exactly like this. It's a *reference*: Railway fills in the private database address. |
+| `NODE_ENV` | `production` |
+| `TRUST_PROXY` | `true` |
+| `APP_URL` | For now `https://example.com`. You'll set the real Vercel address in step 6. |
+| `ANTHROPIC_API_KEY` | Your Anthropic key (`sk-ant-…`) |
+| `AI_MODEL` | `claude-sonnet-5-5` (optional) |
+| `JSEARCH_API_KEY` | Your JSearch key |
+| `JSEARCH_MONTHLY_LIMIT` | Your JSearch plan's monthly allowance (optional) |
+| `STRIPE_SECRET_KEY` | Your **TEST** secret key `sk_test_…` |
+| `STRIPE_PRICE_MONTHLY` | **Test** monthly `price_…` ($9.99/month) |
+| `STRIPE_PRICE_YEARLY` | **Test** yearly `price_…` ($79/year) |
+| `STRIPE_WEBHOOK_SECRET` | Leave it out for now (step 8) |
+| `STRIPE_ALLOW_LIVE` | `false` |
+| `RESEND_API_KEY`, `EMAIL_FROM` | Optional, for password-reset email (step 11) |
+
+Don't set `PORT`: Railway provides it and the app uses it.
+
+Then **Settings → Networking → Generate Domain**. You get an address like `first-job-ai-production.up.railway.app`. Write it down: this is your **backend address**.
+
+---
+
+## 5. Deploy the backend and check it (you)
+
+1. Railway redeploys after you change variables (or click **Deploy**). Open the service's **Deployments → View logs**. You should see:
+   ```
+   [First Job AI] No dist/ folder: running API-only ...
+   [First Job AI] AI: on · Job search: on (...) · ... · Premium billing: test mode
+   First Job AI is running at http://localhost:8080
+   [First Job AI] Database: PostgreSQL at postgres.railway.internal:5432/railway
+   ```
+   If the log says `DATABASE_URL is not set`, go back to step 4. (`localhost` in that line is normal: it's the port inside Railway.)
+2. Open `https://YOUR-BACKEND.up.railway.app/healthz` in your browser. It must show `ok`. This also proves the database answers.
+3. Open `https://YOUR-BACKEND.up.railway.app/` → it says "This is the First Job AI API server". That's correct: the app itself comes from Vercel.
+
+### 5b. Move your existing accounts and data into PostgreSQL (optional, recommended)
+
+Your current accounts, resumes, applications, AI usage and subscription records are in `data\first-job-ai.db`. Copy them into Railway's database **before anyone signs up online** (the import only runs into an empty database):
+
+1. Railway → **Postgres** service → **Variables** → copy `DATABASE_PUBLIC_URL` (this one works from your computer).
+2. In PowerShell (the address stays in this window only, not in any file):
    ```powershell
    cd C:\Users\alber\Downloads\first-job-ai\first-job-ai
-   git status
+   $env:DATABASE_URL = "PASTE-DATABASE_PUBLIC_URL-HERE"
+   npm run db:import
+   Remove-Item Env:DATABASE_URL
    ```
-   Check that `.env`, `data/` and any `.db` file are **not** listed. They're ignored on purpose.
-3. Commit and push. Replace `YOUR-USERNAME`:
+3. It prints the rows copied per table, checked against the database. If anything fails, **nothing** is written. Your SQLite file is never changed, and a copy is saved in `data\backups\` first. Keep both.
+
+If you see an SSL error, add `?sslmode=no-verify` to the end of the address and run it again.
+
+Note: subscriptions you made in Stripe **test** mode come along, but they never grant Premium once live keys are used (test and live data are kept apart).
+
+---
+
+## 6. Deploy the frontend to Vercel and connect both (you: account)
+
+1. **Point Vercel at your backend.** In [vercel.json](../vercel.json), replace `YOUR-BACKEND.up.railway.app` (two places) with your backend address from step 4. Commit and push to `main`:
    ```powershell
-   git add -A
-   git commit -m "Prepare production launch"
-   git branch -M main
-   git remote add origin https://github.com/YOUR-USERNAME/first-job-ai.git
-   git push -u origin main
+   git add vercel.json
+   git commit -m "Point /api to the Railway backend"
+   git push
    ```
-   The first push opens a GitHub sign-in window.
+   (A Vercel build with the placeholder still in place stops with a clear error, so you can't accidentally launch a site whose API doesn't work.)
+2. Sign up at <https://vercel.com> with GitHub. **Add New → Project → Import** `albertovarg5/first-job-ai`.
+   - Framework: **Vite** (detected). Build command `npm run build`, output `dist` (both come from `vercel.json`).
+   - Environment variables: **none**. Don't copy any keys to Vercel.
+   - **Deploy.**
+3. Vercel shows your site address, e.g. `https://first-job-ai.vercel.app` (or add your own domain: Project → **Settings → Domains**).
+4. **Connect both:** Railway → backend → Variables → set `APP_URL` to that exact address (`https://…`, no trailing slash). Railway redeploys.
+   `APP_URL` is used for Stripe's return pages and password-reset links, and to accept the requests Vercel forwards.
 
 ---
 
-## 3. Create the service on Render (you: account and paid plan)
+## 7. Test the whole app online (you)
 
-1. Sign up at <https://render.com> with your GitHub account, and add a payment method.
-2. **New → Blueprint** → choose the `first-job-ai` repository. Render reads `render.yaml` and shows:
-   - a web service called **first-job-ai** (build: `npm ci --include=dev && npm run build`, start: `npm start`, health check `/healthz`);
-   - a **1 GB disk** mounted at `/var/data`.
-3. Render asks for the values marked secret. For this first deploy use your **TEST** Stripe values:
+On your Vercel address:
 
-   | Variable | What to enter |
-   | --- | --- |
-   | `APP_URL` | For now `https://first-job-ai.onrender.com`, or whatever address Render shows for your service. Change it in step 4. |
-   | `ANTHROPIC_API_KEY` | Your Anthropic key (`sk-ant-…`) |
-   | `JSEARCH_API_KEY` | Your JSearch key |
-   | `RESEND_API_KEY`, `EMAIL_FROM` | Leave blank for now (password reset stays off) or see step 8 |
-   | `STRIPE_SECRET_KEY` | **Test** secret key `sk_test_…` |
-   | `STRIPE_WEBHOOK_SECRET` | Leave blank for a moment (step 5) |
-   | `STRIPE_PRICE_MONTHLY` | Test monthly `price_…` |
-   | `STRIPE_PRICE_YEARLY` | Test yearly `price_…` |
-
-   These are already filled in by the blueprint:
-   - `NODE_ENV=production`
-   - `DATABASE_PATH=/var/data/first-job-ai.db`
-   - `TRUST_PROXY=true`
-   - `CLIENT_IP_HEADER=cf-connecting-ip`
-   - `AI_MODEL=claude-sonnet-5-5`
-   - `STRIPE_ALLOW_LIVE=false`
-4. **Apply**, and wait for the deploy to finish. In the service's **Logs**, you should see:
-   ```
-   [First Job AI] AI: on · Job search: on (...) · ... · Premium billing: test mode
-   [backup] Wrote /var/data/backups/first-job-ai-....db
-   First Job AI is running at ...
-   [First Job AI] Database: /var/data/first-job-ai.db
-   ```
-   If the database path is **not** `/var/data/…`, stop and fix `DATABASE_PATH`, otherwise accounts would vanish on the next deploy.
-5. Open `https://YOUR-SERVICE.onrender.com/healthz`. It should show `ok`.
-
-Secret values live only in Render's **Environment** tab. Never put them in `render.yaml`, in Git, or in a variable starting with `VITE_`.
+1. `https://YOUR-SITE/healthz` shows `ok` (this goes Vercel → Railway → PostgreSQL).
+2. **Create an account**, sign out, sign in again. Try a wrong password: it's refused.
+3. **Resume Builder:** write a summary, save. **Job Tracker:** add an application. Refresh the page: both are still there.
+4. Open `https://YOUR-SITE/settings` directly and press **F5**: the page loads (no 404).
+5. **AI:** use an AI tool (e.g. the summary helper). **Settings → AI connection** says Connected, and the usage count goes up.
+6. **Job Search:** search "office assistant": real listings appear.
+7. **Privacy:** in a private window, create a second account. It sees none of the first account's data.
+8. **Persistence:** Railway → backend → **Redeploy**. Sign in again: everything is still there.
 
 ---
 
-## 4. Domain and HTTPS (you: buy a domain)
+## 8. Stripe TEST mode online (you)
 
-1. Buy a domain from any registrar, for example Cloudflare Registrar, Namecheap or Porkbun. Usually about $10–15 a year for a `.com`.
-2. Render → your service → **Settings → Custom Domains → Add**. Enter `yourdomain.com` and/or `www.yourdomain.com`.
-3. Render shows the DNS records to create (a `CNAME`, and for the bare domain an `A`/`ALIAS` record). Add exactly those at your registrar.
-4. Wait until Render shows the domain as **Verified** with a certificate issued. That can take minutes to a few hours. Render renews HTTPS certificates automatically.
-5. Render → **Environment**: set `APP_URL=https://yourdomain.com` (no trailing slash), save, and redeploy.
-
-`APP_URL` is used for Stripe's return pages, password-reset links and the http→https redirect. Every other address redirects to it.
-
----
-
-## 5. Test the real site with Stripe TEST mode
-
-This proves the deployed site, database and webhooks work before any real money is involved.
-
-1. Stripe Dashboard, **test mode / sandbox**, in the account your keys belong to:
-   **Developers → Webhooks → Add endpoint**
-   - Endpoint URL: `https://yourdomain.com/api/billing/webhook`
+1. Stripe Dashboard, **test mode / sandbox**: **Developers → Webhooks → Add endpoint** (or *Add destination*):
+   - Endpoint URL: `https://YOUR-BACKEND.up.railway.app/api/billing/webhook` (straight to Railway).
+   - API version: `2026-09-30.endive` (the version of the installed `stripe` package).
    - Events. Select these 14:
      ```
      checkout.session.completed
@@ -126,178 +164,131 @@ This proves the deployed site, database and webhooks work before any real money 
      charge.dispute.created
      ```
    - Save, then **Reveal** the signing secret (`whsec_…`).
-2. Render → Environment: set `STRIPE_WEBHOOK_SECRET` to that test `whsec_…`, then redeploy.
-3. Render → service → **Shell**, and run:
-   ```bash
+2. Railway → backend → Variables: `STRIPE_WEBHOOK_SECRET` = that test `whsec_…`.
+3. Test mode needs both prices: Stripe (test mode) → Product catalog → your Premium product must have **$9.99 monthly** and **$79 yearly** recurring prices, and their IDs must be in `STRIPE_PRICE_MONTHLY` / `STRIPE_PRICE_YEARLY`.
+4. Test mode → **Settings → Billing → Customer portal**: allow card updates, cancellation at period end, switching between both prices, add your terms/privacy links, **Save**.
+5. Run the read-only check **inside** the Railway service (it can reach the private database there):
+   ```powershell
+   npm install -g @railway/cli
+   railway login
+   railway link        # choose the project and the backend service
+   railway ssh         # opens a shell inside the running backend
    npm run check:production
+   exit
    ```
-   Fix every ✖. The ⚠ about a test key is expected at this stage.
-4. On `https://yourdomain.com`:
-   - sign up;
-   - go to **Plans & Pricing → Subscribe monthly** and pay with `4242 4242 4242 4242`, any future date, any CVC;
-   - you should return to "Welcome to Premium", and Settings should show **200** AI requests;
-   - **Manage subscription** → cancel. It stays Premium until the period ends.
-5. Stripe → Developers → Webhooks → your endpoint should show **200** responses.
-6. Redeploy once more, then sign in again. Your account and subscription must still be there. That proves the disk is working.
+   Fix every ✖ it reports. The ⚠ about a test key is expected now.
+6. On your site: **Plans & Pricing → Subscribe monthly**, pay with `4242 4242 4242 4242`, any future date, any CVC. You return to "Welcome to Premium". Settings shows Premium with the higher AI allowance.
+7. **Manage subscription** → cancel. It stays Premium until the period ends. Stripe → Webhooks → your endpoint shows `200` for each event.
+8. Try **yearly** too.
 
 ---
 
-## 6. Set up Stripe LIVE mode (you)
+## 9. Set up Stripe LIVE mode (you)
 
 Test and live mode are completely separate in Stripe. Live mode has its own keys, products, prices, webhook endpoints and portal settings, and none of the test objects carry over.
 
-### 6a. Activate the account (you, required by Stripe)
+**One Stripe account per business.** Your current Stripe account also has a webhook for another project. Customers see the account's name, support email and card-statement name, so consider a separate Stripe account for First Job AI (Stripe lets one login own several accounts). First Job AI ignores customers it didn't create either way.
 
-Stripe Dashboard → **Activate payments** (or Settings → Account details). Stripe asks for:
-- **business type**, and your legal name or company name;
-- address, date of birth, and a tax ID (for example the last digits of your SSN, or an EIN in the US), possibly with an ID document;
-- what you sell, and your **website** (`https://yourdomain.com`);
-- **bank account** for payouts (Settings → Business → Bank accounts and currencies);
-- **public details** (Settings → Business → Public details): the name customers see on card statements, a **customer support email**, and the website.
+### 9a. Activate the account (required by Stripe)
 
-Stripe reviews your website. Stripe's published requirements say it must clearly show:
-- what you sell and the prices;
-- how to contact you;
-- your **refund and cancellation policy**;
-- your **terms of service** and **privacy policy**.
+Stripe Dashboard → **Activate payments**: business type and legal name, address, tax ID, what you sell, your **website** (your Vercel address or domain), **bank account** for payouts, and **public details** (statement name, **support email**). Stripe reviews the website: it must show what you sell and the prices, how to contact you, your refund/cancellation policy, terms of service and privacy policy (step 11).
 
-See step 8.
+### 9b. Live product and prices
 
-### 6b. Create the live product and prices
-
-Switch the Dashboard to **live mode**, then **Product catalog → Add product**:
+Switch the Dashboard to **live mode** → **Product catalog → Add product**:
 - Name: `First Job AI Premium`
-- Description, for example: "200 AI requests a month for job analysis, resume suggestions, cover letters and interview practice."
-- Price 1: **Recurring**, **$9.99 USD**, billing period **Monthly** → Save.
-- **Add another price**: **Recurring**, **$79.00 USD**, **Yearly** → Save.
+- Price 1: **Recurring**, **$9.99 USD**, **Monthly**
+- **Add another price**: **Recurring**, **$79.00 USD**, **Yearly**
 
-Open each price and copy its ID (`price_…`). The monthly one goes in `STRIPE_PRICE_MONTHLY` and the yearly one in `STRIPE_PRICE_YEARLY`.
+Copy each live price ID (`price_…`).
 
-### 6c. Customer portal (live mode)
+### 9c. Customer portal (live mode)
 
-**Settings → Billing → Customer portal**:
-- **Payment methods**: allow customers to update them.
-- **Cancellations**: on, at the **end of the billing period**.
-- **Subscriptions**: allow switching plans, and add both Premium prices.
-- **Business information**: your terms of service and privacy policy links.
-- **Save**.
+**Settings → Billing → Customer portal**: update payment methods on; cancellations on, **at the end of the billing period**; switching plans on with both Premium prices; terms and privacy links; **Save**.
 
-### 6d. Failed payments (live mode)
+### 9d. Failed payments (live mode)
 
-**Settings → Billing → Subscriptions and emails → Manage failed payments**:
-- keep **Smart Retries** on;
-- after the last retry: **Cancel the subscription**.
+**Settings → Billing → Subscriptions and emails → Manage failed payments**: keep **Smart Retries** on; after the last retry **cancel the subscription**. (The app keeps Premium for at most 14 days after a failed payment.)
 
-The app also keeps Premium for at most 14 days after a payment fails.
+### 9e. Live webhook endpoint
 
-### 6e. Live webhook endpoint
+**Developers → Webhooks → Add endpoint** in **live** mode: the same Railway URL, API version `2026-09-30.endive`, the same 14 events. Save, then reveal the **live** signing secret.
 
-**Developers → Webhooks → Add endpoint** (live mode):
-- the same URL, `https://yourdomain.com/api/billing/webhook`;
-- the same **14 events** as in step 5.
+### 9f. Live API key
 
-Save, then reveal the **live** signing secret.
-
-### 6f. Live API key
-
-**Developers → API keys** (live mode) → **Secret key → Reveal**. It starts with `sk_live_`. Copy it directly into Render. Don't save it in a file, an email or a chat.
+**Developers → API keys** (live mode) → **Secret key → Reveal** (`sk_live_…`). Type it straight into Railway in step 10. The app never needs the publishable key.
 
 ---
 
-## 7. Switch the production site to live payments
+## 10. Switch to live payments (only when you decide to)
 
-1. Render → Environment, replacing the test values:
+1. Railway → backend → Variables, replacing the test values:
 
    | Variable | New value |
    | --- | --- |
-   | `STRIPE_SECRET_KEY` | `sk_live_…` (6f) |
-   | `STRIPE_WEBHOOK_SECRET` | live `whsec_…` (6e) |
-   | `STRIPE_PRICE_MONTHLY` | live monthly `price_…` (6b) |
-   | `STRIPE_PRICE_YEARLY` | live yearly `price_…` (6b) |
+   | `STRIPE_SECRET_KEY` | `sk_live_…` (9f) |
+   | `STRIPE_WEBHOOK_SECRET` | live `whsec_…` (9e) |
+   | `STRIPE_PRICE_MONTHLY` | live monthly `price_…` (9b) |
+   | `STRIPE_PRICE_YEARLY` | live yearly `price_…` (9b) |
    | `STRIPE_ALLOW_LIVE` | still `false` |
 
-   Save and deploy. The log should say `Premium billing: locked (live key without STRIPE_ALLOW_LIVE)`. Nobody can be charged yet.
-2. Render → **Shell**:
-   ```bash
-   npm run check:production
-   ```
-   It checks, without changing anything:
-   - the key is live and the account can take charges and pay out;
-   - both prices are live, active, recurring and the right amounts;
-   - the live webhook endpoint exists for your domain with every needed event;
-   - the portal settings;
-   - HTTPS and the http→https redirect;
-   - the database disk;
-   - your Anthropic key.
+   The log should now say `Premium billing: locked (live key without STRIPE_ALLOW_LIVE)`. Nobody can be charged yet. Test subscriptions from step 8 stop counting: with a live key the app only reads live-mode customers and subscriptions.
+2. `railway ssh` → `npm run check:production`. Fix every ✖ until it prints **`READY: you can set STRIPE_ALLOW_LIVE=true and redeploy.`**
+3. Set `STRIPE_ALLOW_LIVE=true`. The log says `Premium billing: LIVE`.
+4. **First real purchase (with your own card):** subscribe monthly, check Settings shows Premium and the live webhook shows `200`, then Stripe → Payments → **Refund** the full amount and check your account returns to Free. (This costs the Stripe fee on $9.99, about $0.60 for a US card; Stripe keeps the fee on refunds.)
 
-   Fix every ✖ until it prints **`READY: you can set STRIPE_ALLOW_LIVE=true and redeploy.`**
-3. Render → Environment: set `STRIPE_ALLOW_LIVE=true`, save and deploy. The log should say `Premium billing: LIVE`.
-4. **First real purchase (you, with your own card):**
-   - subscribe monthly on your site;
-   - check that Settings shows Premium, and that Stripe → Webhooks shows `200`;
-   - Stripe → Payments → that payment → **Refund** the full amount;
-   - check that your account returns to Free. That also tests refund handling.
-
-   This one purchase costs you the Stripe fee on $9.99 (about $0.60 for a US card). Stripe doesn't return the fee when you refund.
-
-**To switch real payments off at any time:** set `STRIPE_ALLOW_LIVE=false` and redeploy. Checkout closes immediately. Existing subscribers keep renewing in Stripe, and their webhooks are still processed.
+**To switch real payments off at any time:** set `STRIPE_ALLOW_LIVE=false`. Checkout closes immediately; existing subscribers keep renewing and their webhooks are still processed.
 
 ---
 
-## 8. Before you announce the launch (you)
+## 11. Before you announce the launch (you)
 
-- **Legal pages.** Publish a **Privacy Policy**, **Terms of Service** and a **Refund & cancellation policy**, plus a **support email**, and link them in Stripe (6a, 6c).
-  - The app stores résumés, job applications and emails, so the privacy policy must say what you collect, why, which services process it (Stripe, Anthropic, JSearch, Render, Resend), and how people can delete their account. The app has a delete-account button.
-  - The app doesn't include these pages yet. Write them, or have them drafted from your real business details, and get them reviewed for your country. They aren't legal advice from this guide.
-- **Taxes.** Whether you must collect sales tax or VAT depends on where you and your customers are, and on your revenue. Stripe Tax can calculate and collect it (for an extra fee), but registering with tax authorities is your responsibility. Ask an accountant if unsure. The app doesn't turn on tax collection.
-- **Password reset email.** Create a [Resend](https://resend.com) account, verify your domain there, and set `RESEND_API_KEY` and `EMAIL_FROM` (e.g. `First Job AI <no-reply@yourdomain.com>`). Until then, users who forget their password can't reset it.
-- **Anthropic billing.** In console.anthropic.com → Billing: add credits or a payment method, and set a **monthly spend limit** you're comfortable with.
-- **JSearch.** Set `JSEARCH_MONTHLY_LIMIT` to your plan's monthly request allowance.
+- **Legal pages:** Privacy Policy, Terms of Service, Refund & cancellation policy and a support email, linked in Stripe (9a, 9c). The privacy policy must name the services that process data: Stripe, Anthropic, JSearch, Railway, Vercel, Resend. Get them reviewed for your country.
+- **Taxes:** whether you must collect sales tax/VAT depends on where you and your customers are. Stripe Tax can help (extra fee); registering is your responsibility.
+- **Password reset email:** [Resend](https://resend.com) account, verified domain, then `RESEND_API_KEY` and `EMAIL_FROM` on Railway.
+- **Anthropic:** add credits and set a monthly spend limit at console.anthropic.com → Billing.
+- **JSearch:** set `JSEARCH_MONTHLY_LIMIT` to your plan's allowance.
 
 ---
 
-## 9. Running it
+## 12. Running it
 
-- **Logs:** Render → Logs. Problems are logged with `[billing]`, `[error]`, `[health]` or `[config]` at the start.
-- **Health:** Render checks `/healthz`, which also reads the database, and restarts the service if it fails. For alerts by email, add a free uptime monitor (for example UptimeRobot) on `https://yourdomain.com/healthz`.
-- **Backups:**
-  - Render snapshots the disk daily and keeps 7 days.
-  - The app itself writes a consistent copy to `/var/data/backups/` at every start and every 24 hours, keeping 14.
-  - For an extra one now: Render Shell → `npm run backup`.
-  - Now and then, copy a backup to your computer using Render's SSH access (see Render's docs on SSH).
-- **Deploys:** `render.yaml` sets auto-deploy **off**. After pushing to GitHub, click **Manual Deploy** in Render. Run `npm test` and `npm run build` on your computer first.
-- **Refunds and disputes:**
-  - A full refund of the latest payment, or a dispute, ends Premium automatically.
-  - Partial refunds keep Premium.
-  - Answer disputes in Stripe → Payments → Disputes.
+- **Logs:** Railway → backend → Deployments → View logs. Problems start with `[billing]`, `[error]`, `[health]`, `[db]` or `[config]`.
+- **Health:** Railway checks `/healthz` (which also queries the database) during each deploy and restarts the backend if it crashes. For alerts, add a free uptime monitor on `https://YOUR-SITE/healthz`.
+- **Backups:** Railway Postgres backups (step 3), plus now and then a copy on your computer:
+  ```powershell
+  $env:DATABASE_URL = "PASTE-DATABASE_PUBLIC_URL-HERE"
+  npm run backup
+  Remove-Item Env:DATABASE_URL
+  ```
+  This writes `data\backups\first-job-ai-<date>.db`. To restore into an **empty** database: `npm run db:import -- data\backups\first-job-ai-<date>.db`.
+- **Deploys:** pushing to `main` redeploys both Railway and Vercel. Run `npm test` and `npm run build` on your computer first.
+- **One backend instance:** keep Railway at 1 replica (rate limits and the search cache are in memory).
 
 ---
 
-## All environment variables
-
-Set these in Render → Environment. The values below are placeholders.
+## All backend environment variables (Railway)
 
 | Variable | Production value | Notes |
 | --- | --- | --- |
-| `NODE_ENV` | `production` | Set by the blueprint |
-| `DATABASE_PATH` | `/var/data/first-job-ai.db` | Must be on the disk. Set by the blueprint |
-| `APP_URL` | `https://yourdomain.com` | Public address, no trailing slash |
-| `TRUST_PROXY` | `true` | Set by the blueprint |
-| `CLIENT_IP_HEADER` | `cf-connecting-ip` | Real visitor IP for rate limits on Render |
+| `DATABASE_URL` | `${{Postgres.DATABASE_URL}}` | Required. Reference to the Railway Postgres service |
+| `NODE_ENV` | `production` | |
+| `APP_URL` | `https://YOUR-SITE` | The Vercel address or your domain, no trailing slash |
+| `TRUST_PROXY` | `true` | |
 | `ANTHROPIC_API_KEY` | `sk-ant-...` | Secret |
 | `AI_MODEL` | `claude-sonnet-5-5` | Optional |
-| `AI_FREE_MONTHLY_LIMIT` | *(blank = 20)* | Optional |
-| `AI_PREMIUM_MONTHLY_LIMIT` | *(blank = 200)* | Optional |
+| `AI_FREE_MONTHLY_LIMIT` / `AI_PREMIUM_MONTHLY_LIMIT` | *(blank = 20 / 200)* | Optional |
 | `JSEARCH_API_KEY` | `your-jsearch-key` | Secret |
 | `JSEARCH_MONTHLY_LIMIT` | e.g. `200` | Your plan's allowance |
-| `RESEND_API_KEY` | `re_...` | Secret, for password reset |
-| `EMAIL_FROM` | `First Job AI <no-reply@yourdomain.com>` | Domain verified in Resend |
-| `STRIPE_SECRET_KEY` | `sk_live_...` | Secret. Test first: `sk_test_...` |
+| `RESEND_API_KEY` / `EMAIL_FROM` | `re_...` / `First Job AI <no-reply@yourdomain.com>` | Password reset |
+| `STRIPE_SECRET_KEY` | `sk_test_...` → `sk_live_...` in step 10 | Secret |
 | `STRIPE_WEBHOOK_SECRET` | `whsec_...` | Secret. From the endpoint of the **same mode** |
 | `STRIPE_PRICE_MONTHLY` | `price_...` | $9.99/month, same mode as the key |
 | `STRIPE_PRICE_YEARLY` | `price_...` | $79/year, same mode as the key |
-| `STRIPE_ALLOW_LIVE` | `false` → `true` in step 7 | Safety lock |
+| `STRIPE_ALLOW_LIVE` | `false` → `true` in step 10 | Safety lock |
 
-Optional: `BACKUP_DIR`, `BACKUP_KEEP` (default 14), `BACKUP_DISABLED`, `STRIPE_EXTRA_PREMIUM_PRICES` (old price IDs that should keep granting Premium).
+Optional: `STRIPE_EXTRA_PREMIUM_PRICES` (old price IDs that should keep granting Premium), `BACKUP_DIR` (a Railway volume path, turns on daily snapshots), `BACKUP_KEEP`.
 
-**Keep test and live values apart.** Your local `.env` keeps the **test** values for development. Live values exist only in Render. The app refuses to charge a price whose mode doesn't match the key, and `npm run check:production` flags any mix-up.
+Vercel: **no variables.** Only `vercel.json` must name the backend address.
+
+**Keep test and live values apart.** Your local `.env` keeps the **test** values. Live values exist only in Railway. The app refuses to charge a price whose mode doesn't match the key, ignores webhook events from the other mode, and `npm run check:production` flags any mix-up.

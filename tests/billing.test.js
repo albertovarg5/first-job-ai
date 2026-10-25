@@ -4,7 +4,7 @@
 // tested for real. No network calls, no real keys, no charges.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -14,7 +14,9 @@ import { billingConfig } from '../server/billing.js';
 import { grantsPremium, subscriptionFields } from '../server/billingStore.js';
 import { checkConfig } from '../server/config.js';
 import { clientIp, httpsRedirect, proxySettings } from '../server/http.js';
-import { MIGRATIONS, openDatabase } from '../server/db.js';
+import { openDatabase } from '../server/db.js';
+import { importSqlite } from '../server/importSqlite.js';
+import { hashPassword } from '../server/auth.js';
 import { call, jsonResponse, withFetch } from './helpers.js';
 
 const WEBHOOK_SECRET = 'whsec_test_secret';
@@ -275,11 +277,14 @@ test('client IP: a header set by the proxy wins over a forgeable X-Forwarded-For
   assert.equal(proxySettings({ CLIENT_IP_HEADER: 'bad header!' }).header, '');
 });
 
-test('production config: the database must be on persistent storage', () => {
+test('production config: the database must be a real PostgreSQL server on a host', () => {
   const prod = { NODE_ENV: 'production', APP_URL: 'https://app.example.com' };
-  assert.ok(checkConfig(prod).warnings.some((w) => w.includes('DATABASE_PATH is not an absolute path')));
-  assert.ok(checkConfig({ ...prod, DATABASE_PATH: 'data/x.db' }).warnings.some((w) => w.includes('DATABASE_PATH')));
-  assert.ok(!checkConfig({ ...prod, DATABASE_PATH: '/var/data/first-job-ai.db' }).warnings.some((w) => w.includes('DATABASE_PATH')));
+  assert.ok(checkConfig(prod).warnings.some((w) => w.includes('DATABASE_URL is not set')), 'on your own computer: a warning');
+  assert.ok(checkConfig({ ...prod, RAILWAY_PROJECT_ID: 'p' }).errors.some((e) => e.includes('DATABASE_URL is not set')), 'on Railway: refuses to start');
+  assert.ok(checkConfig({ ...prod, DATABASE_URL: 'data/x.db' }).errors.some((e) => e.includes('postgresql://')));
+  const ok = checkConfig({ ...prod, RAILWAY_PROJECT_ID: 'p', DATABASE_URL: 'postgresql://u:p@db.internal:5432/railway' });
+  assert.ok(![...ok.errors, ...ok.warnings].some((m) => m.includes('DATABASE_URL')));
+  assert.ok(checkConfig({ VITE_DATABASE_URL: 'postgresql://x' }).errors.some((e) => e.includes('VITE_DATABASE_URL')), 'never exposed to the browser');
 });
 
 test('portal: needs sign-in and the user’s own Stripe customer, and explains a missing portal setup', async () => {
@@ -578,6 +583,40 @@ test('a Stripe outage during a webhook returns 500 so Stripe retries, and the ev
   assert.equal((await status(user)).plan, 'premium');
 });
 
+test('switching to live keys: test-mode customers and subscriptions are never used or trusted', async () => {
+  const { db, logs, signUp, pay, webhook, event, as, status } = await setup();
+  const user = await signUp('switch@example.com');
+  const { session } = await pay(user);
+  await webhook(event('checkout.session.completed', session));
+  assert.equal((await status(user)).plan, 'premium', 'test-mode Premium while on test keys');
+
+  // Same database, now with live keys (as on launch day).
+  const liveStripe = fakeStripe();
+  liveStripe.state.livePrices = ['price_month', 'price_year'];
+  const liveEnv = { ...ENV, STRIPE_SECRET_KEY: 'sk_live_fake', STRIPE_ALLOW_LIVE: 'true' };
+  const live = createApi(liveEnv, { db, stripe: liveStripe, log: { info() {}, warn: (m) => logs.push(String(m)), error: (m) => logs.push(String(m)) } });
+  const liveStatus = (await call(live, 'GET', '/billing/status', undefined, as(user))).body;
+  assert.equal(liveStatus.plan, 'free', 'a test subscription grants nothing in live mode');
+  assert.equal(liveStatus.subscription, null);
+  assert.equal(liveStatus.canManage, false, 'the test customer is not offered in the live portal');
+
+  const res = await call(live, 'POST', '/billing/checkout', { interval: 'year' }, as(user));
+  assert.equal(res.status, 200, 'not blocked as "already subscribed" by the test subscription');
+  assert.equal(liveStripe.state.customers.length, 1, 'a new live customer, not the test one');
+  assert.equal(liveStripe.state.customers[0].opts.idempotencyKey, `fja-customer-${user.id}-live`);
+  assert.equal([...liveStripe.state.sessions.values()][0].customer, liveStripe.state.customers[0].id);
+
+  // A test-mode event reaching the live server is acknowledged and ignored.
+  const testEvt = { ...event('customer.subscription.updated', { id: session.subscription, object: 'subscription' }), livemode: false };
+  const body = JSON.stringify(testEvt);
+  const header = realStripe.webhooks.generateTestHeaderString({ payload: body, secret: WEBHOOK_SECRET });
+  const ignored = await call(live, 'POST', '/billing/webhook', body, { headers: { 'stripe-signature': header } });
+  assert.equal(ignored.status, 200);
+  assert.equal(ignored.body.ignored, true);
+  assert.equal(liveStripe.state.retrieves, 0);
+  assert.ok(logs.some((l) => l.includes('Ignored test-mode event')));
+});
+
 // ---------- AI limits per plan ----------
 
 test('AI limits: Free and Premium allowances are enforced on the server', async () => {
@@ -637,29 +676,87 @@ test('entitlement rules: only Premium prices with a valid status, within the pai
   assert.equal(fields.currentPeriodEnd, new Date(1790000000 * 1000).toISOString());
 });
 
-test('upgrading the database keeps existing accounts, resumes, saved jobs and applications', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'fja-billing-'));
+// The SQLite database exactly as the app created it before PostgreSQL.
+const OLD_SQLITE_SCHEMA = `
+  CREATE TABLE schema_version (version INTEGER NOT NULL); INSERT INTO schema_version VALUES (4);
+  CREATE TABLE users (id TEXT PRIMARY KEY, email TEXT NOT NULL UNIQUE COLLATE NOCASE, password_hash TEXT NOT NULL, created_at TEXT NOT NULL, password_changed_at TEXT NOT NULL, plan TEXT NOT NULL DEFAULT 'free');
+  CREATE TABLE sessions (token_hash TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, created_at TEXT NOT NULL, expires_at TEXT NOT NULL);
+  CREATE TABLE password_resets (token_hash TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, expires_at TEXT NOT NULL, used_at TEXT);
+  CREATE TABLE user_data (user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE, data TEXT NOT NULL, revision INTEGER NOT NULL, updated_at TEXT NOT NULL);
+  CREATE TABLE api_usage (period TEXT NOT NULL, service TEXT NOT NULL, count INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (period, service));
+  CREATE TABLE ai_usage (user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, period TEXT NOT NULL, count INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (user_id, period));
+  CREATE TABLE billing_customers (user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE, stripe_customer_id TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL, livemode INTEGER NOT NULL DEFAULT 0);
+  CREATE TABLE subscriptions (stripe_subscription_id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, stripe_customer_id TEXT NOT NULL, price_id TEXT, interval TEXT, plan TEXT NOT NULL, status TEXT NOT NULL, current_period_end TEXT, cancel_at_period_end INTEGER NOT NULL DEFAULT 0, cancel_at TEXT, canceled_at TEXT, ended_at TEXT, past_due_since TEXT, updated_at TEXT NOT NULL, livemode INTEGER NOT NULL DEFAULT 0);
+  CREATE TABLE stripe_events (id TEXT PRIMARY KEY, type TEXT NOT NULL, processed_at TEXT NOT NULL);`;
+
+test('moving to PostgreSQL keeps accounts, passwords, resumes, applications, AI usage and Premium', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'fja-import-'));
   const file = join(dir, 'old.db');
+  const db = await openDatabase(':memory:');
   try {
-    // A database as it was before billing existed (schema version 2).
     const old = new DatabaseSync(file);
-    old.exec('CREATE TABLE schema_version (version INTEGER NOT NULL); INSERT INTO schema_version VALUES (2);');
-    old.exec(MIGRATIONS[0]);
-    old.exec(MIGRATIONS[1]);
-    old.prepare("INSERT INTO users (id, email, password_hash, created_at, password_changed_at) VALUES ('u1', 'kept@example.com', 'h', 'now', 'now')").run();
+    old.exec(OLD_SQLITE_SCHEMA);
+    const period = new Date().toISOString().slice(0, 7);
+    const periodEnd = new Date(Date.now() + 20 * DAY).toISOString();
     const data = { resume: { summary: 'Kept' }, savedJobs: [{ id: 'j1', job: { title: 'Analyst' } }], applications: [{ id: 'a1', title: 'Analyst', status: 'applied' }] };
-    old.prepare("INSERT INTO user_data (user_id, data, revision, updated_at) VALUES ('u1', ?, 7, 'now')").run(JSON.stringify(data));
+    old.prepare("INSERT INTO users VALUES ('u1', 'kept@example.com', ?, 'c', 'c', 'free'), ('u2', 'other@example.com', 'h', 'c', 'c', 'free')").run(await hashPassword('my old password'));
+    old.prepare("INSERT INTO user_data VALUES ('u1', ?, 7, 'now')").run(JSON.stringify(data));
+    old.prepare("INSERT INTO ai_usage VALUES ('u1', ?, 3)").run(period);
+    old.prepare("INSERT INTO api_usage VALUES (?, 'jsearch', 12)").run(period);
+    old.prepare("INSERT INTO subscriptions VALUES ('sub_kept', 'u1', 'cus_kept', 'price_month', 'month', 'premium', 'active', ?, 0, NULL, NULL, NULL, NULL, 'now', 0)").run(periodEnd);
+    old.exec(`INSERT INTO sessions VALUES ('t1', 'u1', 'c', '2099-01-01');
+      INSERT INTO password_resets VALUES ('r1', 'u2', '2000-01-01', NULL);
+      INSERT INTO billing_customers VALUES ('u1', 'cus_kept', 'c', 0);
+      INSERT INTO stripe_events VALUES ('evt_1', 'invoice.paid', 'now');`);
     old.close();
 
-    const db = await openDatabase(file);
-    assert.equal(db.prepare('SELECT version FROM schema_version').get().version, MIGRATIONS.length);
-    assert.equal(db.prepare('SELECT email FROM users').get().email, 'kept@example.com');
-    const row = db.prepare('SELECT data, revision FROM user_data').get();
-    assert.deepEqual(JSON.parse(row.data), data);
-    assert.equal(row.revision, 7);
-    assert.equal(db.prepare('SELECT COUNT(*) AS n FROM subscriptions').get().n, 0);
-    db.close();
+    const counts = await importSqlite(file, db);
+    assert.deepEqual(counts, { users: 2, sessions: 1, password_resets: 1, user_data: 1, api_usage: 1, ai_usage: 1, billing_customers: 1, subscriptions: 1, stripe_events: 1 });
+
+    const api = createApi(ENV, { db, stripe: fakeStripe(), log: { info() {}, warn() {}, error() {} } });
+    const signin = await call(api, 'POST', '/auth/signin', { email: 'kept@example.com', password: 'my old password' });
+    assert.equal(signin.status, 200, 'the old password still works');
+    const as = { headers: { cookie: cookieFrom(signin) } };
+    const saved = (await call(api, 'GET', '/data', undefined, as)).body;
+    assert.deepEqual(saved.data.applications, data.applications);
+    assert.equal(saved.data.resume.summary, 'Kept');
+    assert.equal(saved.revision, 7);
+    const billing = (await call(api, 'GET', '/billing/status', undefined, as)).body;
+    assert.equal(billing.plan, 'premium', 'the paid subscription carries over');
+    assert.equal(billing.canManage, true);
+    assert.equal((await call(api, 'GET', '/usage', undefined, as)).body.ai.used, 3);
+    assert.equal((await call(api, 'POST', '/auth/signin', { email: 'other@example.com', password: 'my old password' })).status, 401, 'each account keeps its own password');
+
+    await assert.rejects(importSqlite(file, db), /already has 2 account/, 'never imports into a database that has data');
+    assert.ok(statSync(file).size > 0, 'the SQLite file is untouched');
   } finally {
+    await db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('an import that fails part-way writes nothing; older files import with defaults', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'fja-import-'));
+  const db = await openDatabase(':memory:');
+  try {
+    const broken = join(dir, 'broken.db');
+    const old = new DatabaseSync(broken, { enableForeignKeyConstraints: false });
+    old.exec(OLD_SQLITE_SCHEMA);
+    // A session for an account that doesn't exist (possible in SQLite, where foreign keys can be off).
+    old.exec("INSERT INTO users VALUES ('u1', 'a@example.com', 'h', 'c', 'c', 'free'); INSERT INTO sessions VALUES ('t1', 'ghost', 'c', 'e');");
+    old.close();
+    await assert.rejects(importSqlite(broken, db));
+    assert.equal((await db.one('SELECT COUNT(*)::int AS n FROM users')).n, 0, 'rolled back');
+
+    // A file from before billing existed.
+    const v2 = join(dir, 'v2.db');
+    const older = new DatabaseSync(v2);
+    older.exec("CREATE TABLE users (id TEXT PRIMARY KEY, email TEXT, password_hash TEXT, created_at TEXT, password_changed_at TEXT); INSERT INTO users VALUES ('u1', 'a@example.com', 'h', 'c', 'c');");
+    older.close();
+    assert.equal((await importSqlite(v2, db)).users, 1);
+    assert.equal((await db.one('SELECT plan FROM users')).plan, 'free');
+  } finally {
+    await db.close();
     rmSync(dir, { recursive: true, force: true });
   }
 });

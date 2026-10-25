@@ -1,6 +1,8 @@
-// Production server: serves the built app from dist/ and every /api route.
+// Production server: every /api route, plus the built app from dist/ when it
+// exists. Without dist/ it runs API-only (e.g. on Railway, with the frontend
+// on Vercel forwarding /api here).
 //
-//   npm run build
+//   npm run build   (optional: only to serve the frontend from this server too)
 //   npm start
 //
 // Environment variables are read from the real environment (set them in your
@@ -8,27 +10,21 @@
 
 import { createServer } from 'node:http';
 import { readFile, stat } from 'node:fs/promises';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { extname, join, normalize, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createApi } from './api.js';
 import { reportConfig } from './config.js';
 import { httpsRedirect } from './http.js';
 import { backupSettings } from './backup.js';
+import { describeTarget } from './db.js';
 
 const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const distDir = join(root, 'dist');
 
-// Minimal .env loader for local use. Real environment variables win.
-function loadDotEnv(file) {
-  if (!existsSync(file)) return;
-  for (const line of readFileSync(file, 'utf8').split(/\r?\n/)) {
-    const m = line.match(/^\s*([A-Z0-9_]+)\s*=\s*(.*)\s*$/i);
-    if (!m || line.trim().startsWith('#')) continue;
-    if (process.env[m[1]] === undefined) process.env[m[1]] = m[2].replace(/^(['"])(.*)\1$/, '$2');
-  }
-}
-loadDotEnv(join(root, '.env'));
+// .env for local use, parsed by Node like Vite and check:production do (the last
+// duplicate wins). Real environment variables win.
+if (existsSync(join(root, '.env'))) process.loadEnvFile(join(root, '.env'));
 if (!process.env.NODE_ENV) process.env.NODE_ENV = 'production';
 
 const TYPES = {
@@ -63,6 +59,11 @@ const SECURITY_HEADERS = {
 };
 
 async function serveStatic(req, res) {
+  if (!hasFrontend) {
+    res.statusCode = 404;
+    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+    return res.end('This is the First Job AI API server. The app itself is served by the frontend host.');
+  }
   let urlPath;
   try {
     urlPath = decodeURIComponent((req.url || '/').split('?')[0]);
@@ -102,10 +103,8 @@ async function serveStatic(req, res) {
   res.end(body);
 }
 
-if (!existsSync(join(distDir, 'index.html'))) {
-  console.error('dist/ is missing. Run "npm run build" first.');
-  process.exit(1);
-}
+const hasFrontend = existsSync(join(distDir, 'index.html'));
+if (!hasFrontend) console.log('[First Job AI] No dist/ folder: running API-only (run "npm run build" to serve the app from here too).');
 
 const config = reportConfig(process.env);
 if (config.errors.length) {
@@ -163,26 +162,39 @@ const server = createServer(async (req, res) => {
 try {
   await api.ready(); // Open the database (and run migrations) before accepting traffic.
 } catch (err) {
-  console.error('Could not open the database:', err.message);
+  console.error(`Could not open the database (${describeTarget(process.env.DATABASE_URL || 'data/pglite')}):`, err.message);
   process.exit(1);
 }
 
-server.listen(port, () => {
-  console.log(`First Job AI is running at http://localhost:${port}`);
-  console.log(`[First Job AI] Database: ${resolve(process.env.DATABASE_PATH || 'data/first-job-ai.db')}`);
+// Without this, a busy port surfaced as an "uncaught exception" stack trace and exit.
+server.on('error', (err) => {
+  if (err.code === 'EADDRINUSE') {
+    console.error(`Port ${port} is already in use, most likely by another First Job AI server that is still running.`);
+    console.error(`Stop it (PowerShell: Get-NetTCPConnection -LocalPort ${port} -State Listen | % { Stop-Process -Id $_.OwningProcess }) or start this one with another PORT.`);
+  } else {
+    console.error(`Could not start the server on port ${port}:`, err.message);
+  }
+  process.exit(1);
 });
 
-// Daily database backups in production (BACKUP_DISABLED=true turns them off).
-if (process.env.NODE_ENV === 'production' && process.env.BACKUP_DISABLED !== 'true') {
-  const settings = backupSettings(process.env);
-  const runBackup = () =>
-    api
-      .backup(settings)
-      .then((file) => console.log(`[backup] Wrote ${file}`))
-      .catch((err) => console.error('[backup] Failed:', err.message));
-  runBackup();
-  setInterval(runBackup, 24 * 60 * 60 * 1000).unref();
-}
+server.listen(port, () => {
+  console.log(`First Job AI is running at http://localhost:${port}`);
+  console.log(`[First Job AI] Database: ${describeTarget(process.env.DATABASE_URL || 'data/pglite')}`);
+
+  // Daily snapshots in production, only when BACKUP_DIR is set: it must be on
+  // storage that survives deploys (a Railway volume). Without it, use the
+  // database host's backups and `npm run backup` from your own computer.
+  if (process.env.NODE_ENV === 'production' && process.env.BACKUP_DIR && process.env.BACKUP_DISABLED !== 'true') {
+    const settings = backupSettings(process.env);
+    const runBackup = () =>
+      api
+        .backup(settings)
+        .then((file) => console.log(`[backup] Wrote ${file}`))
+        .catch((err) => console.error('[backup] Failed:', err.message));
+    runBackup();
+    setInterval(runBackup, 24 * 60 * 60 * 1000).unref();
+  }
+});
 
 // Unexpected errors go to the log (the host keeps it) instead of vanishing.
 process.on('unhandledRejection', (err) => console.error('[error] Unhandled promise rejection:', err));

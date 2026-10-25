@@ -183,13 +183,13 @@ const RAW = {
   job_description: 'SQL and Excel reporting.',
 };
 
-test('saved jobs and tracker entries persist per user in SQLite across sign-out, sign-in and restart', async () => {
+test('saved jobs and tracker entries persist per user in the database across sign-out, sign-in and restart', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'fja-int-'));
   const file = join(dir, 'app.db');
   try {
     // First server process.
     let db = await openDatabase(file);
-    let api = createApi({ DATABASE_PATH: file }, { db, log: quietLog });
+    let api = createApi({}, { db, log: quietLog });
     const signup = await call(api, 'POST', '/auth/signup', { email: 'saver@example.com', password: 'save my jobs please' });
     let cookie = cookieFrom(signup);
 
@@ -208,11 +208,11 @@ test('saved jobs and tracker entries persist per user in SQLite across sign-out,
     // Another user sees nothing.
     const other = cookieFrom(await call(api, 'POST', '/auth/signup', { email: 'other@example.com', password: 'other user phrase' }, { ip: '10.9.9.9' }));
     assert.equal((await call(api, 'GET', '/data', undefined, { headers: { cookie: other } })).body.data, null);
-    db.close();
+    await db.close();
 
     // "Restart": new database connection and API on the same file, sign in again.
     db = await openDatabase(file);
-    api = createApi({ DATABASE_PATH: file }, { db, log: quietLog });
+    api = createApi({}, { db, log: quietLog });
     const signin = await call(api, 'POST', '/auth/signin', { email: 'saver@example.com', password: 'save my jobs please' });
     assert.equal(signin.status, 200);
     cookie = cookieFrom(signin);
@@ -224,7 +224,7 @@ test('saved jobs and tracker entries persist per user in SQLite across sign-out,
     assert.equal(got.body.data.applications.length, 1);
     assert.equal(got.body.data.applications[0].status, 'applied');
     assert.equal(got.body.data.applications[0].sourceJobId, 'own-1');
-    db.close();
+    await db.close();
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

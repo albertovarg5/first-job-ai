@@ -188,15 +188,15 @@ test('AI allowance: counted per user, refunded on failure, blocked at the limit,
       assert.deepEqual({ plan: u.ai.plan, used: u.ai.used, limit: u.ai.limit }, { plan: 'free', used: 2, limit: 2 });
 
       // Editing users.plan grants nothing: the plan comes only from a verified subscription.
-      db.prepare("UPDATE users SET plan = 'premium' WHERE email = 'alice@example.com'").run();
+      await db.run("UPDATE users SET plan = 'premium' WHERE email = 'alice@example.com'");
       assert.equal((await usage(alice)).ai.plan, 'free');
       assert.equal((await ai(alice)).status, 403);
 
       // What the verified Stripe webhook stores for an active Premium subscription.
-      const aliceId = db.prepare("SELECT id FROM users WHERE email = 'alice@example.com'").get().id;
+      const aliceId = (await db.one("SELECT id FROM users WHERE email = 'alice@example.com'")).id;
       const store = createBillingStore(db);
-      store.linkCustomer(aliceId, 'cus_alice');
-      store.saveSubscription({
+      await store.linkCustomer(aliceId, 'cus_alice');
+      await store.saveSubscription({
         subscriptionId: 'sub_alice',
         userId: aliceId,
         customerId: 'cus_alice',
@@ -207,29 +207,39 @@ test('AI allowance: counted per user, refunded on failure, blocked at the limit,
       assert.equal((await usage(alice)).ai.planLabel, 'Premium');
     },
   );
-  db.close();
+  await db.close();
 });
 
-test('backups: a consistent copy of the database is written and old copies are pruned', async () => {
+test('backups: a snapshot of the database is written, old copies are pruned, and it restores with the importer', async () => {
   const { mkdtempSync, readdirSync, rmSync } = await import('node:fs');
   const { tmpdir } = await import('node:os');
   const { basename, join } = await import('node:path');
-  const { DatabaseSync } = await import('node:sqlite');
   const { backupDatabase, backupSettings } = await import('../server/backup.js');
+  const { importSqlite } = await import('../server/importSqlite.js');
   const dir = mkdtempSync(join(tmpdir(), 'fja-backup-'));
-  const db = new DatabaseSync(join(dir, 'live.db'));
-  let copy;
+  const db = await openDatabase(':memory:');
+  const restored = await openDatabase(':memory:');
   try {
-    db.exec("CREATE TABLE users (email TEXT); INSERT INTO users VALUES ('a@example.com')");
-    const settings = { ...backupSettings({ DATABASE_PATH: join(dir, 'live.db') }), keep: 2 };
-    assert.equal(settings.dir, join(dir, 'backups'));
-    const files = [0, 1, 2].map((i) => backupDatabase(db, settings, new Date(Date.UTC(2026, 9, 24, 3, 0, i))));
+    const api = createApi({}, { db, log: quietLog });
+    const cookie = cookieFrom(await call(api, 'POST', '/auth/signup', { email: 'kept@example.com', password: 'keep my data safe' }));
+    await call(api, 'PUT', '/data', { baseRevision: 0, data: { applications: [{ id: 'a1', title: 'Analyst', status: 'applied' }] } }, { headers: { cookie } });
+
+    const settings = { ...backupSettings({ BACKUP_DIR: join(dir, 'backups') }), keep: 2 };
+    const files = [];
+    for (const i of [0, 1, 2]) files.push(await backupDatabase(db, settings, new Date(Date.UTC(2026, 9, 24, 3, 0, i))));
     assert.deepEqual(readdirSync(settings.dir).sort(), files.slice(1).map((file) => basename(file)), 'only the newest 2 are kept');
-    copy = new DatabaseSync(files[2], { readOnly: true });
-    assert.equal(copy.prepare('SELECT email FROM users').get().email, 'a@example.com');
+
+    // Restoring the newest snapshot into an empty database gives back the account and its data.
+    const counts = await importSqlite(files[2], restored);
+    assert.equal(counts.users, 1);
+    const again = createApi({}, { db: restored, log: quietLog });
+    const signin = await call(again, 'POST', '/auth/signin', { email: 'kept@example.com', password: 'keep my data safe' });
+    assert.equal(signin.status, 200);
+    const data = await call(again, 'GET', '/data', undefined, { headers: { cookie: cookieFrom(signin) } });
+    assert.equal(data.body.data.applications[0].title, 'Analyst');
   } finally {
-    copy?.close();
-    db.close();
+    await db.close();
+    await restored.close();
     rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   }
 });

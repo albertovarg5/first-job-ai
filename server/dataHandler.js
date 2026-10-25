@@ -31,17 +31,18 @@ export function sanitizeUserData(raw) {
 }
 
 export function createDataHandler({ db, requireUser }) {
-  const get = db.prepare('SELECT data, revision, updated_at FROM user_data WHERE user_id = ?');
-  const insert = db.prepare('INSERT INTO user_data (user_id, data, revision, updated_at) VALUES (?, ?, 1, ?)');
-  const update = db.prepare('UPDATE user_data SET data = ?, revision = revision + 1, updated_at = ? WHERE user_id = ? AND revision = ?');
+  const get = (userId) => db.one('SELECT data, revision, updated_at FROM user_data WHERE user_id = $1', [userId]);
+  // ON CONFLICT DO NOTHING: if another request created the row first, nothing is inserted (a conflict).
+  const insert = (...p) => db.run('INSERT INTO user_data (user_id, data, revision, updated_at) VALUES ($1, $2, 1, $3) ON CONFLICT DO NOTHING', p);
+  const update = (...p) => db.run('UPDATE user_data SET data = $1, revision = revision + 1, updated_at = $2 WHERE user_id = $3 AND revision = $4', p);
 
   return async function dataHandler(req, res, next) {
     const path = pathOf(req);
     if (path !== '/') return typeof next === 'function' ? next() : send(res, 404, { error: 'Not found' });
     try {
-      const user = requireUser(req);
+      const user = await requireUser(req);
       if (req.method === 'GET') {
-        const row = get.get(user.id);
+        const row = await get(user.id);
         return send(res, 200, row ? { data: JSON.parse(row.data), revision: row.revision, updatedAt: row.updated_at } : { data: null, revision: 0, updatedAt: null });
       }
       if (req.method === 'PUT') {
@@ -50,24 +51,19 @@ export function createDataHandler({ db, requireUser }) {
         if (!Number.isInteger(baseRevision) || baseRevision < 0) throw new HttpError(400, 'Missing baseRevision.', 'invalid_input');
         const json = JSON.stringify(sanitizeUserData(body.data));
         const now = new Date().toISOString();
-        const current = get.get(user.id);
+        const current = await get(user.id);
         let ok;
-        if (!current) {
-          try {
-            ok = baseRevision === 0 && insert.run(user.id, json, now).changes === 1;
-          } catch {
-            ok = false; // Another request created the row first.
-          }
-        } else ok = update.run(json, now, user.id, baseRevision).changes === 1;
+        if (!current) ok = baseRevision === 0 && (await insert(user.id, json, now)) === 1;
+        else ok = (await update(json, now, user.id, baseRevision)) === 1;
         if (!ok) {
-          const latest = get.get(user.id);
+          const latest = await get(user.id);
           return send(res, 409, {
             error: 'Your data was changed on another device or tab.',
             code: 'conflict',
             revision: latest?.revision ?? 0,
           });
         }
-        const saved = get.get(user.id);
+        const saved = await get(user.id);
         return send(res, 200, { revision: saved.revision, updatedAt: saved.updated_at });
       }
       return send(res, 405, { error: 'Method not allowed' });
