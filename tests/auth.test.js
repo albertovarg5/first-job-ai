@@ -7,7 +7,7 @@ import { sanitizeUserData } from '../server/dataHandler.js';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { call } from './helpers.js';
+import { call, jsonResponse, withFetch } from './helpers.js';
 
 async function setup(env = {}) {
   const db = await openDatabase(':memory:');
@@ -233,6 +233,30 @@ test('a reset link used by two requests at once changes the password only once',
   assert.equal((await call(api, 'POST', '/auth/reset', { token, password: 'second new phrase' })).status, 400);
   assert.equal((await call(api, 'POST', '/auth/signin', { email: 'race@example.com', password: 'second new phrase' })).status, 401);
   assert.equal((await call(api, 'POST', '/auth/signin', { email: 'race@example.com', password: 'first new phrase' })).status, 200);
+});
+
+// Production bug: Forgot password opened on a Vercel deployment URL (not the production domain) got 403.
+test('forgot password: allowed from APP_URL, refused from a Vercel deployment URL with a pointer to the real site', async () => {
+  const sent = [];
+  const db = await openDatabase(':memory:');
+  const env = { NODE_ENV: 'production', APP_URL: 'https://first-job-ai-steel.vercel.app', RESEND_API_KEY: 're_test', EMAIL_FROM: 'First Job AI <no-reply@example.com>' };
+  const api = createApi(env, { db, log: { info() {}, warn() {}, error() {} } });
+  const viaVercel = (origin) => ({ headers: { host: 'first-job-ai-production.up.railway.app', origin } });
+  await call(api, 'POST', '/auth/signup', { email: 'owner@example.com', password: 'a long pass phrase' }, viaVercel(env.APP_URL));
+
+  const preview = await call(api, 'POST', '/auth/forgot', { email: 'owner@example.com' }, viaVercel('https://first-job-gwer2nppe-albertos-projects-2fbaa380.vercel.app'));
+  assert.equal(preview.status, 403);
+  assert.equal(preview.body.error, 'This request was blocked for security reasons. Open https://first-job-ai-steel.vercel.app and try again.');
+  assert.equal((await db.one('SELECT COUNT(*)::int AS n FROM password_resets')).n, 0, 'nothing reached the reset handler');
+
+  const ok = await withFetch(
+    async (url, opts) => (sent.push(JSON.parse(opts.body)), jsonResponse({ id: 'email_1' })),
+    () => call(api, 'POST', '/auth/forgot', { email: 'owner@example.com' }, viaVercel(env.APP_URL)),
+  );
+  assert.equal(ok.status, 200);
+  assert.equal(sent.length, 1, 'the email is sent');
+  assert.match(sent[0].text, /^[\s\S]*https:\/\/first-job-ai-steel\.vercel\.app\/reset-password\?token=/, 'the link uses the production domain');
+  assert.equal((await call(api, 'POST', '/auth/forgot', { email: 'owner@example.com' }, viaVercel('https://evil.example'))).status, 403);
 });
 
 test('password reset is refused in production without email, and cookies are Secure', async () => {

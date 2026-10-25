@@ -95,7 +95,9 @@ export function createApi(env = {}, options = {}) {
         refusedOrigins.add(origin);
         (options.log || console).warn?.(`[api] Refused a ${req.method} request from ${origin}: it is neither APP_URL (${appOrigin || 'not set'}) nor this server. If ${origin} is your site, set APP_URL to exactly that address.`);
       }
-      return send(res, 403, { error: 'This request was blocked for security reasons.', code: 'forbidden' });
+      // A real visitor on another copy of the site (e.g. a Vercel deployment URL) is told where the app lives.
+      const where = appOrigin && origin ? ` Open ${appOrigin} and try again.` : '';
+      return send(res, 403, { error: `This request was blocked for security reasons.${where}`, code: 'forbidden' });
     }
     let app;
     try {
