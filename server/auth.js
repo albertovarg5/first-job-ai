@@ -234,6 +234,7 @@ export function createAuth({ db, env = {}, log = console, beforeDeleteUser }) {
     },
 
     'POST /forgot': async (req, res) => {
+      log.info?.('[auth] Reset request received.');
       limit(resetLimiter, clientIp(req, trustProxy));
       const body = await readJson(req, 10000);
       const email = String(body.email || '').trim().toLowerCase();

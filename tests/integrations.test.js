@@ -155,7 +155,7 @@ test('password reset email is sent through Resend with the configured sender', a
   assert.deepEqual(sent[0].body.to, ['mail@example.com']);
   assert.match(sent[0].body.text, /https:\/\/jobs\.example\.com\/reset-password\?token=/);
   // The log names Resend's email id (to look it up in the Resend dashboard), never the address or token.
-  assert.match(logs.at(-1), /accepted by Resend \(email id email_1\)/);
+  assert.deepEqual(logs, ['[auth] Reset request received.', '[auth] Reset email accepted by Resend (email id email_1).']);
 
   // Unknown emails get the same answer and send nothing.
   const unknown = await withFetch(
