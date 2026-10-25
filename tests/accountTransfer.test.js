@@ -4,9 +4,10 @@ import { spawnSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { createApi } from '../server/api.js';
 import { decodeBundle, encodeBundle, exportAccount, importAccount } from '../server/accountTransfer.js';
-import { openDatabase } from '../server/db.js';
+import { TABLES, openDatabase } from '../server/db.js';
 import { call } from './helpers.js';
 
 const quiet = { info() {}, warn() {}, error() {} };
@@ -48,11 +49,14 @@ test('dry run saves nothing; import copies the account; it can sign in and reset
   const bundle = decodeBundle(encodeBundle(await exportAccount(src, 'owner@example.com')));
   const target = await openDatabase(':memory:');
   const before = await counts(target);
+  const everyTable = async () => Object.fromEntries(await Promise.all(TABLES.map(async (t) => [t, (await target.one(`SELECT COUNT(*)::int AS n FROM ${t}`)).n])));
+  const tablesBefore = await everyTable();
 
   const dry = (await importAccount(target, bundle)).join('\n');
   assert.match(dry, /DRY RUN/);
   assert.match(dry, /exactly one account added/);
   assert.deepEqual(await counts(target), before, 'dry run left the database unchanged');
+  assert.deepEqual(await everyTable(), tablesBefore, 'no table changed in the dry run');
 
   const real = (await importAccount(target, bundle, { confirm: true })).join('\n');
   assert.match(real, /IMPORTED/);
@@ -108,39 +112,56 @@ test('import refuses existing accounts and invalid files, and rolls back on any 
   await assert.rejects(importAccount(await openDatabase(':memory:', { migrate: false }), bundle), /schema is missing/);
 });
 
-test('account scripts end to end: export, dry run, import, rerun; no secrets printed', async () => {
+test('account scripts end to end: export reads data/pglite only, dry run, import, rerun; no secrets printed', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'fja-transfer-'));
   try {
-    const { db: src } = await source();
-    const hash = (await src.one("SELECT password_hash FROM users WHERE email = 'owner@example.com'")).password_hash;
-    const file = join(dir, 'account.txt');
-    writeFileSync(file, encodeBundle(await exportAccount(src, 'owner@example.com')));
+    // The "local" database the export must read: <cwd>/data/pglite.
+    const local = await openDatabase(join(dir, 'data', 'pglite'));
+    const localApi = createApi({}, { db: local, log: quiet });
+    const signup = await call(localApi, 'POST', '/auth/signup', { email: 'owner@example.com', password: PASSWORD });
+    await call(localApi, 'PUT', '/data', { baseRevision: 0, data: { profile: { name: 'Shift lead at Riverside Cafe' } } }, { headers: { cookie: String(signup.headers['set-cookie']).split(';')[0] } });
+    const hash = (await local.one('SELECT password_hash FROM users')).password_hash;
+    await local.close();
     const targetDir = join(dir, 'target');
     await (await openDatabase(targetDir)).close(); // An empty, migrated "production" database.
 
-    const env = { ...Object.fromEntries(Object.entries(process.env).filter(([k]) => k !== 'DATABASE_URL' && !k.startsWith('RAILWAY_'))), DATABASE_URL: targetDir };
-    const run = (script, args) => {
-      const r = spawnSync(process.execPath, ['--disable-warning=ExperimentalWarning', `scripts/${script}`, ...args], { env, encoding: 'utf8', timeout: 60000 });
+    const base = Object.fromEntries(Object.entries(process.env).filter(([k]) => k !== 'DATABASE_URL' && k !== 'APP_URL' && !k.startsWith('RAILWAY_')));
+    const run = (script, args, env = {}, cwd = dir) => {
+      const r = spawnSync(process.execPath, ['--disable-warning=ExperimentalWarning', fileURLToPath(new URL(`../scripts/${script}`, import.meta.url)), ...args], { cwd, env: { ...base, ...env }, encoding: 'utf8', timeout: 60000 });
       return { code: r.status, out: r.stdout + r.stderr };
     };
-    const dry = run('account-import.mjs', [file]);
+    const file = join(dir, 'account.txt');
+    // DATABASE_URL points at "production": the export must still read the local database.
+    const exp = run('account-export.mjs', ['owner@example.com', file], { DATABASE_URL: targetDir });
+    assert.equal(exp.code, 0, exp.out);
+    assert.match(exp.out, /Source: local development database \(PGlite\) in data\/pglite/);
+    assert.equal(decodeBundle(readFileSync(file, 'utf8')).user.password_hash, hash, 'the hash is kept');
+    assert.match(run('account-export.mjs', ['owner@example.com', file]).out, /Export failed/, 'never overwrites a file');
+    assert.match(run('account-export.mjs', ['nobody@example.com', join(dir, 'x.txt')]).out, /No account with that email/);
+    assert.match(run('account-export.mjs', ['owner@example.com'], {}, targetDir).out, /No local database/, 'never creates an empty database');
+
+    const env = { DATABASE_URL: targetDir };
+    const dry = run('account-import.mjs', [file], env);
     assert.equal(dry.code, 0, dry.out);
     assert.match(dry.out, /DRY RUN/);
-    const real = run('account-import.mjs', [file, '--confirm']);
+    const real = run('account-import.mjs', [file, '--confirm'], env);
     assert.equal(real.code, 0, real.out);
     assert.match(real.out, /IMPORTED/);
-    assert.match(run('account-import.mjs', [file, '--confirm']).out, /Already imported/);
-    assert.match(run('account-import.mjs', [file, '--yes']).out, /Usage/, 'only --confirm imports');
+    assert.match(real.out, /saved app data identical/);
+    assert.match(run('account-import.mjs', [file, '--confirm'], env).out, /Already imported/);
+    assert.match(run('account-import.mjs', [file, '--yes'], env).out, /Usage/, 'only --confirm imports');
 
-    const exported = join(dir, 'again.txt');
-    const exp = run('account-export.mjs', ['owner@example.com', exported]);
-    assert.equal(exp.code, 0, exp.out);
-    assert.equal(decodeBundle(readFileSync(exported, 'utf8')).user.password_hash, hash, 'round trip keeps the hash');
-    assert.match(run('account-export.mjs', ['owner@example.com', exported]).out, /Export failed/, 'never overwrites a file');
-    assert.match(run('account-export.mjs', ['nobody@example.com', join(dir, 'x.txt')]).out, /No account with that email/);
+    // Output captured by a pipe (like a log collector): the reset link is never printed.
+    const reset = run('reset-link.mjs', ['owner@example.com'], { ...env, APP_URL: 'https://site.example' });
+    assert.equal(reset.code, 1);
+    assert.match(reset.out, /only shown in an interactive terminal/);
+    assert.ok(!/token=/.test(reset.out));
+    const db = await openDatabase(targetDir, { migrate: false });
+    assert.equal((await db.one('SELECT COUNT(*)::int AS n FROM password_resets')).n, 0, 'no reset link was created');
+    await db.close();
 
-    for (const out of [dry.out, real.out, exp.out]) {
-      for (const secret of [hash, hash.split('$')[5], 'owner@example.com', 'Acme']) assert.ok(!out.includes(secret), 'no hash, email or saved data printed');
+    for (const out of [exp.out, dry.out, real.out]) {
+      for (const secret of [hash, hash.split('$')[5], 'owner@example.com', 'Riverside Cafe']) assert.ok(!out.includes(secret), `printed: ${secret === hash ? 'the hash' : secret}`);
     }
   } finally {
     rmSync(dir, { recursive: true, force: true });

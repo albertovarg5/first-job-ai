@@ -106,7 +106,10 @@ export function maskSecrets(message, target) {
   if (t) out = out.replaceAll(t, '<DATABASE_URL>');
   try {
     const { password } = new URL(t);
-    if (password) out = out.replaceAll(decodeURIComponent(password), '***').replaceAll(password, '***');
+    if (password) {
+      out = out.replaceAll(password, '***');
+      out = out.replaceAll(decodeURIComponent(password), '***'); // May throw on a malformed %-escape: the raw form is already masked.
+    }
   } catch {
     /* not a URL */
   }
