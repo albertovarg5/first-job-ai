@@ -53,6 +53,18 @@ export async function verifyPassword(password, stored) {
 const sha256 = (value) => createHash('sha256').update(value).digest('hex');
 const newToken = () => randomBytes(32).toString('base64url');
 
+// Stores a new single-use reset token for a user and returns it. Only its hash
+// is kept; it expires after RESET_MINUTES. Also used by `npm run reset-link`.
+export async function createResetToken(db, userId) {
+  const token = newToken();
+  await db.run('INSERT INTO password_resets (token_hash, user_id, expires_at) VALUES ($1, $2, $3)', [
+    sha256(token),
+    userId,
+    new Date(Date.now() + RESET_MINUTES * 60000).toISOString(),
+  ]);
+  return token;
+}
+
 export function validateEmail(email) {
   const e = String(email || '').trim();
   if (!e) return 'Enter your email address.';
@@ -119,7 +131,6 @@ export function createAuth({ db, env = {}, log = console, beforeDeleteUser }) {
     deleteUserSessions: (id) => db.run('DELETE FROM sessions WHERE user_id = $1', [id]),
     deleteOtherSessions: (...p) => db.run('DELETE FROM sessions WHERE user_id = $1 AND token_hash != $2', p),
     purgeSessions: (now) => db.run('DELETE FROM sessions WHERE expires_at <= $1', [now]),
-    insertReset: (...p) => db.run('INSERT INTO password_resets (token_hash, user_id, expires_at) VALUES ($1, $2, $3)', p),
     resetByToken: (hash) => db.one('SELECT * FROM password_resets WHERE token_hash = $1', [hash]),
     useReset: (...p) => db.run('UPDATE password_resets SET used_at = $1 WHERE token_hash = $2', p),
     deleteUserResets: (id) => db.run('DELETE FROM password_resets WHERE user_id = $1', [id]),
@@ -233,8 +244,7 @@ export function createAuth({ db, env = {}, log = console, beforeDeleteUser }) {
       limit(emailLimiter, `reset:${email}`);
       const user = await q.userByEmail(email);
       if (user) {
-        const token = newToken();
-        await q.insertReset(sha256(token), user.id, new Date(Date.now() + RESET_MINUTES * 60000).toISOString());
+        const token = await createResetToken(db, user.id);
         const link = `${base}/reset-password?token=${token}`;
         if (emailConfigured) {
           try {

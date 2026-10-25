@@ -17,7 +17,8 @@
     "backup": "node --disable-warning=ExperimentalWarning scripts/backup-db.mjs",
     "db:import": "node --disable-warning=ExperimentalWarning scripts/import-sqlite.mjs",
     "check:production": "node --disable-warning=ExperimentalWarning scripts/check-production.mjs",
-    "check:site": "node scripts/check-site.mjs"
+    "check:site": "node scripts/check-site.mjs",
+    "reset-link": "node --disable-warning=ExperimentalWarning scripts/reset-link.mjs"
   },
   "dependencies": {
     "pg": "^8.23.1",

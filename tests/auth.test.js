@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createApi, sameOriginJson } from '../server/api.js';
-import { hashPassword, validatePassword, verifyPassword } from '../server/auth.js';
+import { createResetToken, hashPassword, validatePassword, verifyPassword } from '../server/auth.js';
 import { MIGRATIONS, openDatabase } from '../server/db.js';
 import { sanitizeUserData } from '../server/dataHandler.js';
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -166,6 +166,31 @@ test('password reset: token works once, signs out other sessions', async () => {
   assert.equal((await call(api, 'POST', '/auth/reset', { token, password: 'another new phrase' })).status, 400, 'token is single use');
   assert.equal((await call(api, 'GET', '/auth/me', undefined, { headers: { cookie: oldCookie } })).body.user, null);
   assert.equal((await call(api, 'POST', '/auth/signin', { email: 'r@example.com', password: 'a brand new phrase' })).status, 200);
+});
+
+test('a reset link made on the server (npm run reset-link) recovers the account and keeps its data', async () => {
+  const { api, db } = await setup({ NODE_ENV: 'production' });
+  const { cookie: oldCookie } = await signUp(api, 'owner@example.com');
+  await call(api, 'PUT', '/data', { baseRevision: 0, data: { profile: { name: 'Owner' } } }, { headers: { cookie: oldCookie } });
+  const { id } = await db.one('SELECT id FROM users WHERE email = $1', ['owner@example.com']);
+
+  const token = await createResetToken(db, id);
+  assert.match(token, /^[\w-]{43}$/, '256-bit random token');
+  assert.equal((await db.one('SELECT COUNT(*)::int AS n FROM password_resets WHERE token_hash = $1', [token])).n, 0, 'only the hash is stored');
+  const reset = await call(api, 'POST', '/auth/reset', { token, password: 'my recovered phrase' });
+  assert.equal(reset.status, 200);
+  assert.equal((await call(api, 'POST', '/auth/reset', { token, password: 'again and again' })).status, 400, 'single use');
+  assert.equal((await call(api, 'GET', '/data', undefined, { headers: { cookie: oldCookie } })).status, 401, 'old session signed out');
+  assert.equal((await call(api, 'POST', '/auth/signin', { email: 'owner@example.com', password: 'correct horse battery' })).status, 401);
+  const signin = await call(api, 'POST', '/auth/signin', { email: 'owner@example.com', password: 'my recovered phrase' });
+  assert.equal(signin.status, 200);
+  const data = await call(api, 'GET', '/data', undefined, { headers: { cookie: cookieFrom(signin) } });
+  assert.equal(data.body.data.profile.name, 'Owner', 'saved data is kept');
+  assert.equal((await db.one('SELECT COUNT(*)::int AS n FROM users')).n, 1, 'no duplicate account');
+
+  const expired = await createResetToken(db, id);
+  await db.run("UPDATE password_resets SET expires_at = '2000-01-01T00:00:00.000Z' WHERE used_at IS NULL");
+  assert.equal((await call(api, 'POST', '/auth/reset', { token: expired, password: 'too late phrase' })).status, 400, 'expired');
 });
 
 test('password reset is refused in production without email, and cookies are Secure', async () => {
