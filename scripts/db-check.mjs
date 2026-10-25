@@ -11,25 +11,12 @@
 // password or the full address), counts and dates: never emails, hashes or tokens.
 import { existsSync } from 'node:fs';
 import { validateEmail } from '../server/auth.js';
-import { describeTarget, isPostgresUrl, openDatabase } from '../server/db.js';
+import { describeTarget, isPostgresUrl, maskSecrets, openDatabase } from '../server/db.js';
 import { inspectAccounts } from '../server/dbCheck.js';
 
 if (existsSync('.env')) process.loadEnvFile('.env');
 const target = String(process.env.DATABASE_URL || '').trim();
 const email = String(process.argv[2] || '').trim();
-
-// Error messages are printed without the address or its password.
-function safe(message) {
-  let out = String(message);
-  if (target) out = out.replaceAll(target, '<DATABASE_URL>');
-  try {
-    const { password } = new URL(target);
-    if (password) out = out.replaceAll(decodeURIComponent(password), '***').replaceAll(password, '***');
-  } catch {
-    /* not a URL */
-  }
-  return out;
-}
 
 function stop(message) {
   console.error(message);
@@ -57,7 +44,7 @@ try {
     close = () => db.close();
   }
 } catch (err) {
-  stop(`Couldn’t connect to ${describeTarget(where)}: ${safe(err.message)}. Nothing was read or changed.`);
+  stop(`Couldn’t connect to ${describeTarget(where)}: ${maskSecrets(err.message, target)}. Nothing was read or changed.`);
 }
 
 console.log(`Database: ${describeTarget(where)}${isPostgresUrl(where) ? ' (connected, read-only)' : ' (LOCAL, not production)'}`);
@@ -65,7 +52,7 @@ try {
   await db.one('BEGIN TRANSACTION READ ONLY');
   for (const line of await inspectAccounts(db, email)) console.log(line);
 } catch (err) {
-  console.error(`Database error: ${safe(err.message)}. Nothing was changed.`);
+  console.error(`Database error: ${maskSecrets(err.message, target)}. Nothing was changed.`);
   process.exitCode = 1;
 } finally {
   await db.one('ROLLBACK').catch(() => {});

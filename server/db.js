@@ -99,6 +99,20 @@ export function describeTarget(target) {
   }
 }
 
+// For script output: removes the address and its password from an error message.
+export function maskSecrets(message, target) {
+  let out = String(message);
+  const t = String(target || '');
+  if (t) out = out.replaceAll(t, '<DATABASE_URL>');
+  try {
+    const { password } = new URL(t);
+    if (password) out = out.replaceAll(decodeURIComponent(password), '***').replaceAll(password, '***');
+  } catch {
+    /* not a URL */
+  }
+  return out;
+}
+
 // q(sql, params) -> { rows, rowCount } for both pg and PGlite.
 function wrap(q, extra) {
   return {
@@ -110,7 +124,8 @@ function wrap(q, extra) {
 }
 
 // target: a postgres:// URL, a PGlite folder, or ':memory:' (tests).
-export async function openDatabase(target = 'data/pglite') {
+// migrate: false for scripts that must not change the schema (they check it themselves).
+export async function openDatabase(target = 'data/pglite', { migrate: runMigrations = true } = {}) {
   let db;
   if (isPostgresUrl(target)) {
     const { default: pg } = await import('pg');
@@ -154,7 +169,7 @@ export async function openDatabase(target = 'data/pglite') {
       close: () => lite.close().finally(unlock),
     });
   }
-  await migrate(db);
+  if (runMigrations) await migrate(db);
   return db;
 }
 

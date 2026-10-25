@@ -18,7 +18,9 @@
     "db:import": "node --disable-warning=ExperimentalWarning scripts/import-sqlite.mjs",
     "check:production": "node --disable-warning=ExperimentalWarning scripts/check-production.mjs",
     "check:site": "node scripts/check-site.mjs",
-    "db:check": "node --disable-warning=ExperimentalWarning scripts/db-check.mjs",
+    "account:export": "node --disable-warning=ExperimentalWarning scripts/account-export.mjs",
+    "account:import": "node --disable-warning=ExperimentalWarning scripts/account-import.mjs",
+    "db:check":"node --disable-warning=ExperimentalWarning scripts/db-check.mjs",
     "reset-link": "node --disable-warning=ExperimentalWarning scripts/reset-link.mjs"
   },
   "dependencies": {
