@@ -104,7 +104,13 @@ async function serveStatic(req, res) {
 }
 
 const hasFrontend = existsSync(join(distDir, 'index.html'));
-if (!hasFrontend) console.log('[First Job AI] No dist/ folder: running API-only (run "npm run build" to serve the app from here too).');
+if (!hasFrontend) {
+  console.log(
+    process.env.RAILWAY_PROJECT_ID
+      ? '[First Job AI] API-only (expected on Railway): the frontend is built and served by Vercel, which forwards /api and /healthz here.'
+      : '[First Job AI] No dist/ folder: running API-only (run "npm run build" to serve the app from here too).',
+  );
+}
 
 const config = reportConfig(process.env);
 if (config.errors.length) {

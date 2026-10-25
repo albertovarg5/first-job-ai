@@ -67,8 +67,10 @@ export function checkConfig(env = {}) {
   }
   if (billing.liveBlocked) {
     warnings.push('STRIPE_SECRET_KEY is a LIVE key, but STRIPE_ALLOW_LIVE is not "true", so Premium checkout is off (safety lock). Set STRIPE_ALLOW_LIVE=true only when you are ready to take real payments.');
-  } else if (anyStripe && !billing.configured) {
-    warnings.push('Premium is off until STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET and STRIPE_PRICE_MONTHLY are all set.');
+  } else if ((anyStripe || production) && !billing.configured) {
+    // Name exactly what is missing (or invalid), so the log says what to set.
+    const missing = [['STRIPE_SECRET_KEY', stripeKey], ['STRIPE_WEBHOOK_SECRET', billing.webhookSecret], ['STRIPE_PRICE_MONTHLY', billing.prices.month]].filter(([, v]) => !v).map(([k]) => k);
+    warnings.push(`Premium billing is off until these are set: ${missing.join(', ')}.`);
   }
   // Real payments need a real HTTPS address for Stripe to send customers back to.
   if (billing.configured && billing.live && production && !blank(env.APP_URL) && !/^https:\/\//.test(String(env.APP_URL).trim())) {

@@ -78,7 +78,7 @@ Then **Settings → Networking → Generate Domain**. You get an address like `f
 
 1. Railway redeploys after you change variables (or click **Deploy**). Open the service's **Deployments → View logs**. You should see:
    ```
-   [First Job AI] No dist/ folder: running API-only ...
+   [First Job AI] API-only (expected on Railway): the frontend is built and served by Vercel ...
    [First Job AI] AI: on · Job search: on (...) · ... · Premium billing: test mode
    First Job AI is running at http://localhost:8080
    [First Job AI] Database: PostgreSQL at postgres.railway.internal:5432/railway
