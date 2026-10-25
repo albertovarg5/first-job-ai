@@ -155,7 +155,7 @@ test('password reset email is sent through Resend with the configured sender', a
   assert.deepEqual(sent[0].body.to, ['mail@example.com']);
   assert.match(sent[0].body.text, /https:\/\/jobs\.example\.com\/reset-password\?token=/);
   // The log names Resend's email id (to look it up in the Resend dashboard), never the address or token.
-  assert.deepEqual(logs, ['[auth] Reset request received.', '[auth] Reset email accepted by Resend (email id email_1).']);
+  assert.deepEqual(logs, ['[auth] Reset request received.', '[auth] Account found: sending the reset email through Resend.', '[auth] Reset email accepted by Resend (email id email_1).']);
 
   // Unknown emails get the same answer and send nothing.
   const unknown = await withFetch(
@@ -168,13 +168,14 @@ test('password reset email is sent through Resend with the configured sender', a
   // A Resend failure is reported without leaking details to the browser. This
   // is Resend's answer for onboarding@resend.dev and a recipient other than the account's own email.
   const failed = await withFetch(
-    async () => jsonResponse({ name: 'validation_error', message: 'You can only send testing emails to your own email address.' }, 403),
+    async () => jsonResponse({ name: 'validation_error', message: 'You can only send testing emails to your own email address (owner@example.com). To send emails to other recipients, please verify a domain.' }, 403),
     () => call(api, 'POST', '/auth/forgot', { email: 'mail@example.com' }),
   );
   assert.equal(failed.status, 502);
   assert.equal(failed.body.code, 'email_failed');
   assert.ok(!failed.body.error.includes('re_test'));
-  assert.match(logs.at(-1), /Resend returned status 403: You can only send testing emails/);
+  assert.match(logs.at(-1), /Resend returned status 403: validation_error: You can only send testing emails to your own email address \(<address>\)/);
+  assert.ok(!logs.join('\n').includes('owner@example.com'), "addresses in Resend's message are masked");
   const token = sent[0].body.text.match(/token=([\w-]+)/)[1];
   for (const line of logs) assert.ok(!line.includes('mail@example.com') && !line.includes(token) && !line.includes('re_test'), 'no address, token or key in the log');
 });

@@ -97,8 +97,9 @@ async function sendResetEmail(env, to, link) {
   });
   if (!res.ok) {
     // Resend explains problems such as an unverified sender domain in the body.
-    const detail = await res.json().then((b) => b?.message || b?.name || '', () => '');
-    throw new Error(`Resend returned status ${res.status}${detail ? `: ${detail}` : ''}`);
+    // Its messages can name an address (e.g. the account owner's), so addresses are masked for the log.
+    const detail = await res.json().then((b) => [b?.name, b?.message].filter(Boolean).join(': '), () => '');
+    throw new Error(`Resend returned status ${res.status}${detail ? `: ${detail.replace(/[^\s@()<>]+@[^\s@()<>]+/g, '<address>')}` : ''}`);
   }
   // Resend's id for this email: search for it under Emails in the Resend dashboard.
   return (await res.json().catch(() => null))?.id || 'unknown';
@@ -134,7 +135,7 @@ export function createAuth({ db, env = {}, log = console, beforeDeleteUser }) {
     deleteOtherSessions: (...p) => db.run('DELETE FROM sessions WHERE user_id = $1 AND token_hash != $2', p),
     purgeSessions: (now) => db.run('DELETE FROM sessions WHERE expires_at <= $1', [now]),
     resetByToken: (hash) => db.one('SELECT * FROM password_resets WHERE token_hash = $1', [hash]),
-    useReset: (...p) => db.run('UPDATE password_resets SET used_at = $1 WHERE token_hash = $2', p),
+    useReset: (...p) => db.run('UPDATE password_resets SET used_at = $1 WHERE token_hash = $2 AND used_at IS NULL', p),
     deleteUserResets: (id) => db.run('DELETE FROM password_resets WHERE user_id = $1', [id]),
   };
 
@@ -238,7 +239,10 @@ export function createAuth({ db, env = {}, log = console, beforeDeleteUser }) {
       limit(resetLimiter, clientIp(req, trustProxy));
       const body = await readJson(req, 10000);
       const email = String(body.email || '').trim().toLowerCase();
-      if (validateEmail(email)) throw new HttpError(400, 'Enter a valid email address.', 'invalid_email');
+      if (validateEmail(email)) {
+        log.info?.('[auth] Reset request rejected: invalid email address.');
+        throw new HttpError(400, 'Enter a valid email address.', 'invalid_email');
+      }
       const base = resetLinkBase(req);
       if (!emailConfigured && !devResetLinks) {
         throw new HttpError(501, 'Password reset by email isn’t set up on this server yet. Contact the site owner.', 'reset_unavailable');
@@ -251,6 +255,7 @@ export function createAuth({ db, env = {}, log = console, beforeDeleteUser }) {
         const link = `${base}/reset-password?token=${token}`;
         if (emailConfigured) {
           try {
+            log.info?.('[auth] Account found: sending the reset email through Resend.');
             const emailId = await sendResetEmail(env, user.email, link);
             log.info?.(`[auth] Reset email accepted by Resend (email id ${emailId}).`);
           } catch (err) {
@@ -279,17 +284,23 @@ export function createAuth({ db, env = {}, log = console, beforeDeleteUser }) {
       const token = String(body.token || '');
       const row = token && token.length < 100 ? await q.resetByToken(sha256(token)) : null;
       if (!row || row.used_at || row.expires_at <= new Date().toISOString()) {
+        log.info?.(`[auth] Reset link rejected: ${!row ? 'unknown' : row.used_at ? 'already used' : 'expired'}.`);
         throw new HttpError(400, 'This reset link is invalid or has expired. Ask for a new one.', 'invalid_token');
       }
       const user = await q.userById(row.user_id);
       const passwordError = validatePassword(body.password, user?.email);
       if (passwordError) throw new HttpError(400, passwordError, 'weak_password');
       const now = new Date().toISOString();
+      // Claim the token first: of two requests with the same link, only one gets here.
+      if ((await q.useReset(now, row.token_hash)) !== 1) {
+        log.info?.('[auth] Reset link rejected: already used.');
+        throw new HttpError(400, 'This reset link is invalid or has expired. Ask for a new one.', 'invalid_token');
+      }
       await q.setPassword(await hashPassword(String(body.password)), now, user.id);
-      await q.useReset(now, row.token_hash);
       await q.deleteUserResets(user.id);
       await q.deleteUserSessions(user.id); // Sign out everywhere else.
       await startSession(res, user.id);
+      log.info?.('[auth] Reset link accepted: password updated and other sessions signed out.');
       return send(res, 200, { user: publicUser(user) });
     },
 
@@ -329,7 +340,10 @@ export function createAuth({ db, env = {}, log = console, beforeDeleteUser }) {
     try {
       return await route(req, res);
     } catch (err) {
-      if (err.code === 'rate_limited') return rateLimited(res, err.retryAfter, err.message);
+      if (err.code === 'rate_limited') {
+        log.warn?.(`[auth] ${req.method} ${pathOf(req)} rate limited.`);
+        return rateLimited(res, err.retryAfter, err.message);
+      }
       if (err instanceof HttpError) return send(res, err.status, { error: err.message, code: err.code });
       log.error?.(err);
       return send(res, 500, { error: 'Something went wrong on the server. Please try again.', code: 'server_error' });

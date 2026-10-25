@@ -193,6 +193,48 @@ test('a reset link made on the server (npm run reset-link) recovers the account 
   assert.equal((await call(api, 'POST', '/auth/reset', { token: expired, password: 'too late phrase' })).status, 400, 'expired');
 });
 
+test('password reset: normalized email, invalid and concurrent tokens, rate limit, database errors', async () => {
+  const { api, logs } = await setup();
+  await signUp(api, 'norm@example.com');
+  assert.equal((await call(api, 'POST', '/auth/forgot', { email: '  NORM@Example.COM ' })).status, 200);
+  const token = logs.join('\n').match(/reset-password\?token=([\w-]+)/)?.[1];
+  assert.ok(token, 'capitals and spaces find the same account');
+
+  const invalid = await call(api, 'POST', '/auth/reset', { token: 'not-a-real-token', password: 'a brand new phrase' });
+  assert.equal(invalid.body.code, 'invalid_token');
+  assert.equal((await call(api, 'POST', '/auth/reset', { token, password: 'first new phrase' })).status, 200);
+  assert.equal((await call(api, 'POST', '/auth/signin', { email: 'Norm@Example.com', password: 'first new phrase' })).status, 200);
+  assert.ok(logs.includes('[auth] Reset link accepted: password updated and other sessions signed out.'));
+  assert.ok(!logs.some((l) => l.includes('first new phrase')), 'passwords are never logged');
+
+  const statuses = [];
+  for (let i = 0; i < 6; i += 1) statuses.push((await call(api, 'POST', '/auth/forgot', { email: `x${i}@example.com` }, { ip: '10.9.9.9' })).status);
+  assert.deepEqual(statuses, [200, 200, 200, 200, 200, 429], 'reset requests are rate limited per address');
+
+  const db = await openDatabase(':memory:');
+  const broken = createApi({}, { db: { ...db, one: async () => { throw new Error('connection terminated: secret-host'); } }, log: { info() {}, error() {} } });
+  const failed = await call(broken, 'POST', '/auth/forgot', { email: 'norm@example.com' });
+  assert.equal(failed.status, 500);
+  assert.equal(failed.body.code, 'server_error');
+  assert.ok(!JSON.stringify(failed.body).includes('secret-host'), 'database details stay on the server');
+});
+
+test('a reset link used by two requests at once changes the password only once', async () => {
+  const db = await openDatabase(':memory:');
+  const logs = [];
+  let stale = null; // The row as a second, simultaneous request read it: before the first one used it.
+  const racing = { ...db, one: (sql, p) => (stale && sql.startsWith('SELECT * FROM password_resets') ? stale : db.one(sql, p)) };
+  const api = createApi({}, { db: racing, log: { info: (m) => logs.push(m), error() {} } });
+  await signUp(api, 'race@example.com');
+  await call(api, 'POST', '/auth/forgot', { email: 'race@example.com' });
+  const token = logs.join('\n').match(/reset-password\?token=([\w-]+)/)[1];
+  stale = await db.one('SELECT * FROM password_resets');
+  assert.equal((await call(api, 'POST', '/auth/reset', { token, password: 'first new phrase' })).status, 200);
+  assert.equal((await call(api, 'POST', '/auth/reset', { token, password: 'second new phrase' })).status, 400);
+  assert.equal((await call(api, 'POST', '/auth/signin', { email: 'race@example.com', password: 'second new phrase' })).status, 401);
+  assert.equal((await call(api, 'POST', '/auth/signin', { email: 'race@example.com', password: 'first new phrase' })).status, 200);
+});
+
 test('password reset is refused in production without email, and cookies are Secure', async () => {
   const { api } = await setup({ NODE_ENV: 'production' });
   const res = await call(api, 'POST', '/auth/forgot', { email: 'x@example.com' });
