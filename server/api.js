@@ -84,10 +84,17 @@ export function createApi(env = {}, options = {}) {
   } catch {
     /* an invalid APP_URL is reported by checkConfig */
   }
+  // Each refused origin is logged once (capped), so a wrong APP_URL shows up in the server log.
+  const refusedOrigins = new Set();
 
   // Connect-style middleware mounted at /api.
   async function api(req, res) {
     if (!sameOriginJson(req, appOrigin)) {
+      const origin = String(req.headers?.origin || '').slice(0, 200);
+      if (origin && refusedOrigins.size < 50 && !refusedOrigins.has(origin)) {
+        refusedOrigins.add(origin);
+        (options.log || console).warn?.(`[api] Refused a ${req.method} request from ${origin}: it is neither APP_URL (${appOrigin || 'not set'}) nor this server. If ${origin} is your site, set APP_URL to exactly that address.`);
+      }
       return send(res, 403, { error: 'This request was blocked for security reasons.', code: 'forbidden' });
     }
     let app;

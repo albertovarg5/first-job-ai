@@ -132,6 +132,23 @@ test('cross-site and non-JSON writes are blocked', async () => {
   assert.equal((await call(behindProxy, 'POST', '/auth/signin', { email: 'proxy@example.com', password: 'through the proxy' }, { headers: { origin: 'https://evil.example' } })).status, 403);
 });
 
+// Production bug: APP_URL on Railway was not the Vercel address, so every sign-in through Vercel got 403.
+test('a site that is not APP_URL is refused behind the proxy, and the log names the fix', async () => {
+  const warnings = [];
+  const db = await openDatabase(':memory:');
+  const api = createApi({ APP_URL: 'https://example.com' }, { db, log: { info() {}, error() {}, warn: (m) => warnings.push(m) } });
+  const viaVercel = { host: 'api.up.railway.app', origin: 'https://site.vercel.app' };
+  const body = { email: 'a@b.co', password: 'not a real one' };
+  assert.equal((await call(api, 'POST', '/auth/signin', body, { headers: viaVercel })).status, 403);
+  await call(api, 'POST', '/auth/signin', body, { headers: viaVercel });
+  assert.equal(warnings.length, 1, 'logged once per origin');
+  assert.match(warnings[0], /https:\/\/site\.vercel\.app.*APP_URL \(https:\/\/example\.com\)/);
+  assert.ok(!warnings[0].includes(body.password));
+
+  const fixed = createApi({ APP_URL: 'https://site.vercel.app/' }, { db });
+  assert.equal((await call(fixed, 'POST', '/auth/signin', body, { headers: viaVercel })).status, 401, 'trailing slash in APP_URL still matches');
+});
+
 test('password reset: token works once, signs out other sessions', async () => {
   const { api, logs } = await setup();
   const { cookie: oldCookie } = await signUp(api, 'r@example.com');

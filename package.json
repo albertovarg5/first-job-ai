@@ -16,7 +16,8 @@
     "stripe:listen": "node --disable-warning=ExperimentalWarning scripts/stripe-listen.mjs",
     "backup": "node --disable-warning=ExperimentalWarning scripts/backup-db.mjs",
     "db:import": "node --disable-warning=ExperimentalWarning scripts/import-sqlite.mjs",
-    "check:production": "node --disable-warning=ExperimentalWarning scripts/check-production.mjs"
+    "check:production": "node --disable-warning=ExperimentalWarning scripts/check-production.mjs",
+    "check:site": "node scripts/check-site.mjs"
   },
   "dependencies": {
     "pg": "^8.23.1",
