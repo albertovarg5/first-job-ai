@@ -63,7 +63,8 @@ function fakeStripe() {
     prices: {
       async retrieve(id) {
         const year = id === 'price_year';
-        return { id, livemode: state.livePrices?.includes(id) || false, active: !state.inactivePrices?.includes(id), type: 'recurring', recurring: { interval: year ? 'year' : 'month' }, unit_amount: year ? 9900 : 999, currency: 'usd' };
+        const recurring = { interval: year ? 'year' : 'month', interval_count: 1, usage_type: 'licensed', ...state.recurringOverrides?.[id] };
+        return { id, livemode: state.livePrices?.includes(id) || false, active: !state.inactivePrices?.includes(id), type: 'recurring', recurring, unit_amount: year ? 9900 : 999, currency: 'usd' };
       },
     },
     checkout: {
@@ -256,6 +257,33 @@ test('checkout: a price that isn’t an active recurring price in Stripe is neve
   assert.match(res.body.error, /yearly price isn’t set up correctly/);
   assert.equal(stripe.state.sessions.size, 0, 'no checkout session was created');
   assert.equal((await call(api, 'POST', '/billing/checkout', { interval: 'month' }, as(user))).status, 200, 'monthly still works');
+});
+
+test('checkout: a price billed every 3 months or every 2 years, or by usage, is never charged as monthly/yearly', async () => {
+  for (const [interval, id, override] of [
+    ['month', 'price_month', { interval_count: 3 }],
+    ['year', 'price_year', { interval_count: 2 }],
+    ['month', 'price_month', { usage_type: 'metered' }],
+  ]) {
+    const { api, stripe, signUp, as, logs, status } = await setup();
+    stripe.state.recurringOverrides = { [id]: override };
+    const user = await signUp(`odd-${interval}@example.com`);
+    const res = await call(api, 'POST', '/billing/checkout', { interval }, as(user));
+    assert.equal(res.status, 503, JSON.stringify(override));
+    assert.equal(stripe.state.sessions.size, 0, 'no checkout session was created');
+    assert.ok(logs.some((l) => l.includes('billed every 1')), 'the log says what is wrong with the price');
+    assert.equal((await status(user)).prices[interval], null, 'the pricing page shows it as unavailable');
+  }
+});
+
+test('checkout: two checkouts at the same moment (double click, two tabs) open only one', async () => {
+  const { api, stripe, signUp, as } = await setup();
+  const user = await signUp('twice@example.com');
+  const [a, b] = await Promise.all(['month', 'year'].map((interval) => call(api, 'POST', '/billing/checkout', { interval }, as(user))));
+  assert.deepEqual([a.status, b.status].sort(), [200, 409]);
+  assert.equal([a, b].find((r) => r.status === 409).body.code, 'checkout_in_progress');
+  assert.equal(stripe.state.sessions.size, 1, 'one Checkout, so at most one subscription');
+  assert.equal((await call(api, 'POST', '/billing/checkout', { interval: 'month' }, as(user))).status, 200, 'the next click works again');
 });
 
 test('checkout: a price from the other Stripe mode (test vs live) is never charged', async () => {

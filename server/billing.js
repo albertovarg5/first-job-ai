@@ -108,6 +108,10 @@ export function createBilling({ db, env = {}, requireUser, stripe, log = console
     return client;
   };
   const priceCache = new Map(); // interval -> { at, value }
+  // Users with a checkout being created right now: a second click or tab waits its turn instead of
+  // opening a second Checkout that could become a second subscription.
+  // shortcut: in memory, so it guards one server process; use a database lock if you run several.
+  const checkoutsInProgress = new Set();
 
   function requireConfigured() {
     if (!config.configured) throw new HttpError(503, 'Premium isn’t available on this server yet.', 'billing_unavailable');
@@ -129,10 +133,18 @@ export function createBilling({ db, env = {}, requireUser, stripe, log = console
       const p = await stripeClient().prices.retrieve(id);
       if (p.livemode !== undefined && p.livemode !== config.live) {
         log.warn?.(`[billing] STRIPE_PRICE_${interval === 'month' ? 'MONTHLY' : 'YEARLY'} is a ${p.livemode ? 'live' : 'test'}-mode price but the key is ${config.live ? 'live' : 'test'}. Use prices from the same mode as STRIPE_SECRET_KEY.`);
-      } else if (p.active && p.type === 'recurring' && p.recurring?.interval === interval && Number.isInteger(p.unit_amount)) {
+      } else if (
+        p.active &&
+        p.type === 'recurring' &&
+        p.recurring?.interval === interval &&
+        // "Every 3 months" is also interval=month: only every 1 month / 1 year counts, at a fixed (not metered) amount.
+        (p.recurring.interval_count ?? 1) === 1 &&
+        p.recurring.usage_type !== 'metered' &&
+        Number.isInteger(p.unit_amount)
+      ) {
         value = { amount: p.unit_amount, currency: p.currency };
       } else {
-        log.warn?.(`[billing] Price for "${interval}" is not an active ${interval}ly recurring price. Check STRIPE_PRICE_${interval === 'month' ? 'MONTHLY' : 'YEARLY'}.`);
+        log.warn?.(`[billing] Price for "${interval}" is not an active, fixed-amount price billed every 1 ${interval}. Check STRIPE_PRICE_${interval === 'month' ? 'MONTHLY' : 'YEARLY'}.`);
       }
     } catch (err) {
       log.warn?.(`[billing] Could not load the ${interval}ly price from Stripe: ${err.message}`);
@@ -249,6 +261,45 @@ export function createBilling({ db, env = {}, requireUser, stripe, log = console
     return store.linkCustomer(user.id, customer.id);
   }
 
+  // The checkout itself (POST /checkout holds the per-user lock around it).
+  async function createCheckout(req, res, user) {
+    const body = await readJson(req, 1000);
+    const interval = body.interval === 'year' ? 'year' : body.interval === 'month' ? 'month' : null;
+    if (!interval) throw new HttpError(400, 'Choose monthly or yearly billing.', 'invalid_input');
+    const price = config.prices[interval];
+    if (!price) throw new HttpError(400, 'Yearly billing isn’t available.', 'invalid_input');
+    // Only charge a price Stripe confirms is an active recurring price for this interval.
+    if (!(await priceInfo(interval))) {
+      throw new HttpError(503, `The ${interval === 'year' ? 'yearly' : 'monthly'} price isn’t set up correctly in Stripe, so checkout is paused. Please try again later.`, 'billing_unavailable');
+    }
+    // One subscription per user: anything still open must be managed in the portal instead.
+    if ((await store.subscriptionsOf(user.id)).some((r) => isOpenStatus(r.status)) || (await store.planOf(user.id, now())) === 'premium') {
+      throw new HttpError(409, 'You already have a subscription. Use “Manage subscription” to change or cancel it.', 'already_subscribed');
+    }
+    const base = appBase(env, req);
+    if (!base) throw new HttpError(503, 'Premium needs APP_URL to be set on the server.', 'billing_unavailable');
+
+    const stripeApi = stripeClient();
+    const customer = await customerFor(user);
+    // Close any other open checkout so two tabs can't create two subscriptions.
+    const open = await stripeApi.checkout.sessions.list({ customer, status: 'open', limit: 10 });
+    for (const s of open.data || []) await stripeApi.checkout.sessions.expire(s.id);
+
+    const session = await stripeApi.checkout.sessions.create({
+      mode: 'subscription',
+      customer,
+      client_reference_id: user.id,
+      line_items: [{ price, quantity: 1 }],
+      success_url: `${base}/billing/success?session_id={CHECKOUT_SESSION_ID}`,
+      cancel_url: `${base}/billing/cancel`,
+      metadata: { user_id: user.id },
+      subscription_data: { metadata: { user_id: user.id } },
+    });
+    const url = hostedUrl(session.url, CHECKOUT_HOST);
+    if (!url) throw new HttpError(502, 'Stripe returned an unexpected checkout address.', 'billing_error');
+    return send(res, 200, { url });
+  }
+
   const routes = {
     'GET /status': async (req, res) => {
       const prices = config.configured ? { month: await priceInfo('month'), year: await priceInfo('year') } : { month: null, year: null };
@@ -272,41 +323,15 @@ export function createBilling({ db, env = {}, requireUser, stripe, log = console
       const user = await requireUser(req);
       limit(user);
       requireConfigured();
-      const body = await readJson(req, 1000);
-      const interval = body.interval === 'year' ? 'year' : body.interval === 'month' ? 'month' : null;
-      if (!interval) throw new HttpError(400, 'Choose monthly or yearly billing.', 'invalid_input');
-      const price = config.prices[interval];
-      if (!price) throw new HttpError(400, 'Yearly billing isn’t available.', 'invalid_input');
-      // Only charge a price Stripe confirms is an active recurring price for this interval.
-      if (!(await priceInfo(interval))) {
-        throw new HttpError(503, `The ${interval === 'year' ? 'yearly' : 'monthly'} price isn’t set up correctly in Stripe, so checkout is paused. Please try again later.`, 'billing_unavailable');
+      if (checkoutsInProgress.has(user.id)) {
+        throw new HttpError(409, 'Your checkout is already being opened. Please wait a moment.', 'checkout_in_progress');
       }
-      // One subscription per user: anything still open must be managed in the portal instead.
-      if ((await store.subscriptionsOf(user.id)).some((r) => isOpenStatus(r.status)) || (await store.planOf(user.id, now())) === 'premium') {
-        throw new HttpError(409, 'You already have a subscription. Use “Manage subscription” to change or cancel it.', 'already_subscribed');
+      checkoutsInProgress.add(user.id);
+      try {
+        return await createCheckout(req, res, user);
+      } finally {
+        checkoutsInProgress.delete(user.id);
       }
-      const base = appBase(env, req);
-      if (!base) throw new HttpError(503, 'Premium needs APP_URL to be set on the server.', 'billing_unavailable');
-
-      const stripeApi = stripeClient();
-      const customer = await customerFor(user);
-      // Close any other open checkout so two tabs can't create two subscriptions.
-      const open = await stripeApi.checkout.sessions.list({ customer, status: 'open', limit: 10 });
-      for (const s of open.data || []) await stripeApi.checkout.sessions.expire(s.id);
-
-      const session = await stripeApi.checkout.sessions.create({
-        mode: 'subscription',
-        customer,
-        client_reference_id: user.id,
-        line_items: [{ price, quantity: 1 }],
-        success_url: `${base}/billing/success?session_id={CHECKOUT_SESSION_ID}`,
-        cancel_url: `${base}/billing/cancel`,
-        metadata: { user_id: user.id },
-        subscription_data: { metadata: { user_id: user.id } },
-      });
-      const url = hostedUrl(session.url, CHECKOUT_HOST);
-      if (!url) throw new HttpError(502, 'Stripe returned an unexpected checkout address.', 'billing_error');
-      return send(res, 200, { url });
     },
 
     'POST /portal': async (req, res) => {

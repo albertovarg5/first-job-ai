@@ -156,6 +156,7 @@ if (!billing.secretKey) {
       if (p.livemode !== billing.live) fail(`${name} is a ${p.livemode ? 'live' : 'test'}-mode price, but the key is ${mode.toLowerCase()}`);
       else if (!p.active) fail(`${name} (${id}) is archived in Stripe`);
       else if (p.type !== 'recurring' || p.recurring?.interval !== interval) fail(`${name} isn’t a ${interval}ly recurring price`);
+      else if ((p.recurring.interval_count ?? 1) !== 1 || p.recurring.usage_type === 'metered') fail(`${name} must be billed every 1 ${interval} at a fixed amount (checkout refuses it)`);
       else ok(`${name}: ${amount} every ${interval}`);
       if (p.unit_amount !== EXPECTED[interval]) warn(`${name} is ${amount}; the planned price is ${(EXPECTED[interval] / 100).toFixed(2)} USD`);
     } catch (err) {
