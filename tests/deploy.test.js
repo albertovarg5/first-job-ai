@@ -3,7 +3,11 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { createApi } from '../server/api.js';
 import { checkConfig } from '../server/config.js';
+import { openDatabase } from '../server/db.js';
+import { httpsRedirect } from '../server/http.js';
+import { call, jsonResponse, withFetch } from './helpers.js';
 
 const read = (file) => JSON.parse(readFileSync(new URL(`../${file}`, import.meta.url), 'utf8'));
 const BACKEND = 'https://first-job-ai-production.up.railway.app';
@@ -49,6 +53,33 @@ test('production startup lists every missing variable by name and never prints s
   const ready = checkConfig({ NODE_ENV: 'production', APP_URL: 'https://site.example', STRIPE_SECRET_KEY: 'sk_live_x', STRIPE_WEBHOOK_SECRET: 'whsec_x', STRIPE_PRICE_MONTHLY: 'price_1', STRIPE_ALLOW_LIVE: 'true' });
   assert.equal(ready.features.billing, 'LIVE');
   assert.ok(!ready.warnings.some((w) => w.includes('Premium billing is off')));
+});
+
+test('links the server builds (reset email, http→https) ignore spoofed Host and X-Forwarded-Host', async () => {
+  const site = 'https://first-job-ai-steel.vercel.app';
+  const env = { NODE_ENV: 'production', APP_URL: site, RESEND_API_KEY: 're_test', EMAIL_FROM: 'First Job AI <no-reply@example.com>' };
+  const db = await openDatabase(':memory:');
+  const api = createApi(env, { db, log: { info() {}, warn() {}, error() {} } });
+  const spoofed = { host: 'evil.example', 'x-forwarded-host': 'evil.example', 'x-forwarded-proto': 'https', origin: site };
+  await call(api, 'POST', '/auth/signup', { email: 'owner@example.com', password: 'a long pass phrase' }, { headers: spoofed });
+  const sent = [];
+  const res = await withFetch(
+    async (url, opts) => (sent.push(JSON.parse(opts.body)), jsonResponse({ id: 'email_1' })),
+    () => call(api, 'POST', '/auth/forgot', { email: 'owner@example.com' }, { headers: spoofed }),
+  );
+  assert.equal(res.status, 200);
+  assert.match(sent[0].text, /\nhttps:\/\/first-job-ai-steel\.vercel\.app\/reset-password\?token=[\w-]+\n/);
+  assert.ok(!sent[0].text.includes('evil.example'));
+  // A page on another site calling this backend (the browser sends the real Host) never gets that far.
+  const fromEvil = { host: 'first-job-ai-production.up.railway.app', origin: 'https://evil.example' };
+  const refused = await withFetch(
+    async () => assert.fail('no email may be sent'),
+    () => call(api, 'POST', '/auth/forgot', { email: 'owner@example.com' }, { headers: fromEvil }),
+  );
+  assert.equal(refused.status, 403);
+
+  const plainHttp = { url: '/signin?next=https://evil.example', headers: { host: 'evil.example', 'x-forwarded-proto': 'http' } };
+  assert.equal(httpsRedirect(plainHttp, env), `${site}/signin?next=https://evil.example`, 'always to APP_URL, never to the Host header');
 });
 
 test('on Railway the server refuses to start without DATABASE_URL, and its output holds no secrets', () => {

@@ -259,6 +259,17 @@ test('checkout: a price that isn’t an active recurring price in Stripe is neve
   assert.equal((await call(api, 'POST', '/billing/checkout', { interval: 'month' }, as(user))).status, 200, 'monthly still works');
 });
 
+test('checkout: Stripe sends people back to APP_URL, never to a spoofed Host or X-Forwarded-Host', async () => {
+  const site = 'https://first-job-ai-steel.vercel.app';
+  const { api, stripe, signUp, as } = await setup({ NODE_ENV: 'production', APP_URL: site });
+  const user = await signUp('return@example.com');
+  const headers = { ...as(user).headers, host: 'evil.example', 'x-forwarded-host': 'evil.example', origin: site };
+  assert.equal((await call(api, 'POST', '/billing/checkout', { interval: 'year' }, { headers })).status, 200);
+  const [session] = stripe.state.sessions.values();
+  assert.equal(session.success_url, `${site}/billing/success?session_id={CHECKOUT_SESSION_ID}`);
+  assert.equal(session.cancel_url, `${site}/billing/cancel`);
+});
+
 test('checkout: a price billed every 3 months or every 2 years, or by usage, is never charged as monthly/yearly', async () => {
   for (const [interval, id, override] of [
     ['month', 'price_month', { interval_count: 3 }],
