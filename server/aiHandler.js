@@ -140,7 +140,9 @@ const MAX_INPUT = 12000;
 // Upper bound on the reply, including the model's thinking. Only tokens
 // actually used are billed, so a high ceiling costs nothing extra.
 const MAX_TOKENS = 16000;
-const TIMEOUT_MS = 120000;
+// Below Vercel's 120 s limit for a proxied response, so through Vercel the
+// user still gets this server's clear "took too long" message, not Vercel's bare 504.
+export const TIMEOUT_MS = 100000;
 
 class AiError extends Error {
   constructor(status, message, code) {

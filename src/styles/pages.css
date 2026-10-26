@@ -298,6 +298,7 @@ a.stat:hover { background: var(--surface-2); }
 .suggestion-actions { display: flex; gap: 8px; margin-top: 12px; }
 
 .preview-wrap { display: flex; flex-direction: column; gap: 16px; }
+.preview-design { display: flex; flex-wrap: wrap; gap: 12px 20px; }
 .preview-bar { display: flex; justify-content: space-between; align-items: center; gap: 16px; flex-wrap: wrap; }
 
 /* Resume paper (mirrors the PDF) */
@@ -306,18 +307,25 @@ a.stat:hover { background: var(--surface-2); }
   padding: 56px 60px 64px; border: 1px solid var(--line); border-radius: 4px;
   box-shadow: var(--shadow-md); font-family: Helvetica, Arial, sans-serif; font-size: 13.3px; line-height: 1.42;
 }
-.rp-header h2 { font-family: inherit; font-size: 29px; font-weight: 700; letter-spacing: -0.01em; }
-.rp-contact { display: flex; flex-wrap: wrap; gap: 0 14px; margin-top: 6px; color: #555b66; font-size: 12.5px; }
-.rp-contact span + span::before { content: '|'; margin-right: 14px; color: #b9bec7; }
-.resume-paper section { margin-top: 16px; }
-.resume-paper h3 { font-family: inherit; font-size: 14px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.02em; padding-bottom: 5px; border-bottom: 0.8px solid #b9bec7; margin-bottom: 8px; }
-.rp-entry + .rp-entry { margin-top: 9px; }
-.rp-entry-head { display: flex; justify-content: space-between; gap: 12px; }
-.rp-entry-head strong { font-size: 14px; }
-.rp-entry-head span { color: #555b66; font-size: 12.5px; white-space: nowrap; }
+/* Sizes are in em of the paper's font size, so the density setting scales them like the PDF. */
+.rp-header h2 { font-family: inherit; font-size: 2.18em; font-weight: 700; letter-spacing: -0.01em; }
+.rp-contact { display: flex; flex-wrap: wrap; gap: 0 1.05em; margin-top: 0.45em; color: #555b66; font-size: 0.94em; }
+.rp-contact span + span::before { content: '|'; margin-right: 1.05em; color: #b9bec7; }
+.resume-paper section { margin-top: 1.2em; }
+.resume-paper h3 { font-family: inherit; font-size: 1.05em; font-weight: 700; text-transform: uppercase; letter-spacing: 0.02em; padding-bottom: 0.36em; border-bottom: 0.8px solid #b9bec7; margin-bottom: 0.57em; }
+.rp-entry + .rp-entry { margin-top: 0.68em; }
+.rp-entry-head { display: flex; justify-content: space-between; gap: 0.9em; }
+.rp-entry-head strong { font-size: 1.05em; }
+.rp-entry-head span { color: #555b66; font-size: 0.94em; white-space: nowrap; }
 .rp-entry em { display: block; color: #555b66; }
-.resume-paper ul { margin: 3px 0 0; padding-left: 18px; }
+.resume-paper ul { margin: 0.22em 0 0; padding-left: 1.35em; }
 .resume-paper li { margin: 1px 0; }
+.resume-paper.density-compact { font-size: 12.25px; padding: 48px 52px 56px; }
+.resume-paper.density-spacious { font-size: 14.35px; padding: 62px 66px 70px; }
+.resume-paper.tpl-modern .rp-header { text-align: center; }
+.resume-paper.tpl-modern .rp-header h2 { color: #1f3a5f; }
+.resume-paper.tpl-modern .rp-contact { justify-content: center; }
+.resume-paper.tpl-modern h3 { color: #1f3a5f; border-bottom-color: #1f3a5f; }
 
 /* Tailor */
 .tailor { display: flex; flex-direction: column; gap: 20px; }
@@ -345,8 +353,9 @@ a.stat:hover { background: var(--surface-2); }
   .resume-toolbar .segmented { overflow-x: auto; }
   .resume-score { justify-content: space-between; }
   .resume-score-bar { flex: 1; width: auto; }
-  .resume-paper { padding: 28px 20px; font-size: 12.5px; }
-  .rp-header h2 { font-size: 23px; }
+  .resume-paper, .resume-paper.density-compact, .resume-paper.density-spacious { padding: 28px 20px; }
+  .resume-paper { font-size: 12.5px; }
+  .rp-header h2 { font-size: 1.84em; }
   .rp-entry-head { flex-direction: column; gap: 0; }
   .match-columns { grid-template-columns: 1fr; }
   .match-summary { flex-direction: column; align-items: flex-start; }

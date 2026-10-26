@@ -22,6 +22,31 @@ export const SECTION_TEMPLATES = {
   achievements: { title: '', date: '', description: '' },
 };
 
+// Resume designs. All are one column with standard headings, so applicant
+// tracking systems read them in order; they differ in look and section order.
+export const RESUME_TEMPLATES = [
+  { id: 'classic', name: 'Classic', note: 'Minimal and ATS-friendly. Education first: good for students and new graduates.' },
+  { id: 'modern', name: 'Modern', note: 'Centered header with navy section headings. Still one column and ATS-friendly.' },
+  { id: 'experienced', name: 'Experienced', note: 'Experience, projects and skills before education, for people with work history.' },
+];
+export const RESUME_DENSITIES = [
+  { id: 'compact', name: 'Compact', note: 'Smaller text and spacing: fits more on a page' },
+  { id: 'standard', name: 'Standard', note: 'Recommended' },
+  { id: 'spacious', name: 'Spacious', note: 'Larger text and more space' },
+];
+const ORDERS = {
+  classic: ['summary', 'education', 'experience', 'projects', 'volunteering', 'skills', 'achievements'],
+  experienced: ['summary', 'experience', 'projects', 'skills', 'education', 'volunteering', 'achievements'],
+};
+
+// The saved design choice, with safe defaults for resumes made before designs existed.
+export function resumeLayout(resume) {
+  const l = resume?.layout || {};
+  const template = RESUME_TEMPLATES.some((t) => t.id === l.template) ? l.template : 'classic';
+  const density = RESUME_DENSITIES.some((d) => d.id === l.density) ? l.density : 'standard';
+  return { template, density, order: ORDERS[template] || ORDERS.classic };
+}
+
 export function dateRange(start, end) {
   if (start && end) return `${start} – ${end}`;
   return start || end || '';

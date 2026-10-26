@@ -96,14 +96,15 @@ export class PdfDocument {
   }
 
   // y is measured from the top of the page (easier for layout code).
-  text(str, x, y, { font = 'regular', size = 10, color = '#000000' } = {}) {
+  // page: index of an earlier page (e.g. footers added once the page count is known); default the last.
+  text(str, x, y, { font = 'regular', size = 10, color = '#000000', page } = {}) {
     const f = FONTS[font];
     const py = this.height - y;
-    this.ops.push(`BT /${f.key} ${n(size)} Tf ${rgb(color)} rg ${n(x)} ${n(py)} Td (${escapePdfString(toWinAnsiCodes(str))}) Tj ET`);
+    (this.pages[page] ?? this.ops).push(`BT /${f.key} ${n(size)} Tf ${rgb(color)} rg ${n(x)} ${n(py)} Td (${escapePdfString(toWinAnsiCodes(str))}) Tj ET`);
   }
 
-  line(x1, y1, x2, y2, { width = 0.5, color = '#000000' } = {}) {
-    this.ops.push(`${n(width)} w ${rgb(color)} RG ${n(x1)} ${n(this.height - y1)} m ${n(x2)} ${n(this.height - y2)} l S`);
+  line(x1, y1, x2, y2, { width = 0.5, color = '#000000', page } = {}) {
+    (this.pages[page] ?? this.ops).push(`${n(width)} w ${rgb(color)} RG ${n(x1)} ${n(this.height - y1)} m ${n(x2)} ${n(this.height - y2)} l S`);
   }
 
   // Returns the finished PDF as bytes.

@@ -7,7 +7,7 @@ import TailorPanel from '../components/resume/TailorPanel.jsx';
 import { ContactSection, ListSection, SECTIONS, SkillsSection, SummarySection, sectionHasContent } from '../components/resume/ResumeSections.jsx';
 import { useAppData } from '../context/AppDataContext.jsx';
 import { useToast } from '../context/ToastContext.jsx';
-import { resumeChecklist, resumeCompleteness } from '../lib/resume.js';
+import { RESUME_DENSITIES, RESUME_TEMPLATES, resumeChecklist, resumeCompleteness, resumeLayout } from '../lib/resume.js';
 import { downloadResumePdf } from '../lib/resumePdf.js';
 import { timeAgo } from '../lib/utils.js';
 
@@ -38,6 +38,7 @@ export default function ResumeBuilder() {
   const tab = TABS.some((t) => t.value === params.get('tab')) ? params.get('tab') : 'edit';
   const section = SECTIONS.some((s) => s.id === params.get('section')) ? params.get('section') : 'contact';
   const completeness = resumeCompleteness(resume);
+  const layout = resumeLayout(resume);
   const sectionIndex = SECTIONS.findIndex((s) => s.id === section);
 
   const go = (next) => setParams(Object.fromEntries(Object.entries({ tab: next.tab ?? tab, section: next.section ?? section }).filter(([, v]) => v)), { replace: true });
@@ -157,8 +158,24 @@ export default function ResumeBuilder() {
 
       {tab === 'preview' && (
         <div className="preview-wrap">
+          <div className="preview-design">
+            <Segmented
+              label="Resume design"
+              value={layout.template}
+              onChange={(template) => onChange({ ...resume, layout: { ...resume.layout, template } })}
+              options={RESUME_TEMPLATES.map((t) => ({ value: t.id, label: t.name }))}
+            />
+            <Segmented
+              label="Text size and spacing"
+              value={layout.density}
+              onChange={(density) => onChange({ ...resume, layout: { ...resume.layout, density } })}
+              options={RESUME_DENSITIES.map((d) => ({ value: d.id, label: d.name }))}
+            />
+          </div>
           <div className="preview-bar">
-            <p className="muted small">This is how your PDF will look. It uses a simple one-column layout that applicant tracking systems can read.</p>
+            <p className="muted small">
+              {RESUME_TEMPLATES.find((t) => t.id === layout.template).note} The PDF matches this preview and adds page numbers if it runs past one page. Switching designs never changes your content.
+            </p>
             <div className="page-actions">
               <button className="btn btn-secondary" onClick={() => go({ tab: 'edit' })}>
                 <Icon name="edit" size={15} /> Keep editing

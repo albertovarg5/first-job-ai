@@ -26,7 +26,12 @@ export async function apiFetch(url, { method = 'GET', body, networkError, keepal
   }
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
-    throw new ApiError(data.error || `The request failed (status ${res.status}).`, { status: res.status, code: data.code || '', data });
+    // No JSON error: the answer came from the hosting proxy (e.g. Vercel's 502/504 page), not from our server.
+    const proxy = !data.error && [502, 503, 504].includes(res.status);
+    const message = proxy
+      ? `The app server didn’t answer in time (status ${res.status}). Please try again in a moment.`
+      : data.error || `The request failed (status ${res.status}).`;
+    throw new ApiError(message, { status: res.status, code: data.code || (proxy ? 'gateway' : ''), data });
   }
   return data;
 }

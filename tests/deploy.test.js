@@ -3,7 +3,9 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { TIMEOUT_MS as AI_TIMEOUT_MS } from '../server/aiHandler.js';
 import { createApi } from '../server/api.js';
+import { apiFetch } from '../src/lib/api.js';
 import { checkConfig } from '../server/config.js';
 import { openDatabase } from '../server/db.js';
 import { httpsRedirect } from '../server/http.js';
@@ -80,6 +82,21 @@ test('links the server builds (reset email, http→https) ignore spoofed Host an
 
   const plainHttp = { url: '/signin?next=https://evil.example', headers: { host: 'evil.example', 'x-forwarded-proto': 'http' } };
   assert.equal(httpsRedirect(plainHttp, env), `${site}/signin?next=https://evil.example`, 'always to APP_URL, never to the Host header');
+});
+
+test('through Vercel: AI calls end before the proxy limit, and proxy error pages get a clear message', async () => {
+  assert.ok(AI_TIMEOUT_MS < 120000, "the server answers before Vercel's 120 s limit for a proxied response");
+  const vercel504 = () => new Response('<html>An error occurred with your deployment. FUNCTION_INVOCATION_TIMEOUT</html>', { status: 504, headers: { 'content-type': 'text/html' } });
+  const proxied = await withFetch(vercel504, () => apiFetch('/api/ai/resume', { method: 'POST', body: {} }).catch((e) => e));
+  assert.equal(proxied.code, 'gateway');
+  assert.equal(proxied.status, 504);
+  assert.match(proxied.message, /didn’t answer in time \(status 504\)/);
+  // The server's own errors keep their message and code.
+  const ours = await withFetch(() => jsonResponse({ error: 'The AI service took too long to respond. Try again.', code: 'timeout' }, 504), () => apiFetch('/api/ai/resume', { method: 'POST', body: {} }).catch((e) => e));
+  assert.equal(ours.code, 'timeout');
+  assert.equal(ours.message, 'The AI service took too long to respond. Try again.');
+  const forbidden = await withFetch(() => jsonResponse({ error: 'Sign in to use this feature.', code: 'auth_required' }, 401), () => apiFetch('/api/ai/x', { method: 'POST', body: {} }).catch((e) => e));
+  assert.equal(forbidden.code, 'auth_required');
 });
 
 test('on Railway the server refuses to start without DATABASE_URL, and its output holds no secrets', () => {
