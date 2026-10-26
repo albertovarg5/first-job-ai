@@ -172,6 +172,25 @@ export function httpsRedirect(req, env = {}) {
   return appUrl + (path.startsWith('/') ? path : '/');
 }
 
+// ALLOWED_ORIGINS: sites trusted to send requests besides APP_URL (e.g. a
+// Vercel branch preview), as exact https:// origins separated by commas.
+// Wildcards, paths and http:// are refused, so previews are never trusted by accident.
+export function allowedOrigins(env = {}) {
+  const origins = [];
+  const invalid = [];
+  for (const raw of String(env.ALLOWED_ORIGINS || '').split(',').map((s) => s.trim()).filter(Boolean)) {
+    let url = null;
+    try {
+      url = new URL(raw);
+    } catch {
+      /* reported as invalid */
+    }
+    if (url && url.protocol === 'https:' && !raw.includes('*') && url.origin === raw.replace(/\/$/, '')) origins.push(url.origin);
+    else invalid.push(raw.slice(0, 100));
+  }
+  return { origins, invalid };
+}
+
 export function envFlag(value, fallback) {
   if (value === undefined || value === null || String(value).trim() === '') return fallback;
   return /^(1|true|yes|on)$/i.test(String(value).trim());

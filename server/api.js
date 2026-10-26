@@ -9,14 +9,15 @@ import { createDataHandler } from './dataHandler.js';
 import { dbUsageStore, openDatabase } from './db.js';
 import { createJobsHandler } from './jobsHandler.js';
 import { createAiQuota, limitReachedMessage, planLimits } from './plans.js';
-import { RateLimiter, clientIp, envFlag, isProduction, pathOf, proxySettings, rateLimited, send } from './http.js';
+import { RateLimiter, allowedOrigins, clientIp, envFlag, isProduction, pathOf, proxySettings, rateLimited, send } from './http.js';
 
 // State-changing requests must be JSON and, when the browser says where they
 // came from, come from this site. Together with SameSite cookies this blocks
 // cross-site request forgery. appUrl: the public site (APP_URL). When the
 // frontend is on another host (Vercel) that forwards /api here, the browser's
-// Origin is that site, not this server's Host.
-export function sameOriginJson(req, appUrl = '') {
+// Origin is that site, not this server's Host. extra: exact origins from
+// ALLOWED_ORIGINS (see allowedOrigins in http.js).
+export function sameOriginJson(req, appUrl = '', extra = []) {
   // Stripe webhooks come from Stripe's servers and are authenticated by their signature instead.
   if (req.method === 'POST' && pathOf(req) === '/billing/webhook') return true;
   if (req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS') return true;
@@ -26,7 +27,7 @@ export function sameOriginJson(req, appUrl = '') {
   if (!origin) return true;
   try {
     const from = new URL(origin);
-    return from.host === req.headers.host || (appUrl !== '' && from.origin === appUrl);
+    return from.host === req.headers.host || (appUrl !== '' && from.origin === appUrl) || extra.includes(from.origin);
   } catch {
     return false;
   }
@@ -84,16 +85,17 @@ export function createApi(env = {}, options = {}) {
   } catch {
     /* an invalid APP_URL is reported by checkConfig */
   }
+  const extraOrigins = allowedOrigins(env).origins;
   // Each refused origin is logged once (capped), so a wrong APP_URL shows up in the server log.
   const refusedOrigins = new Set();
 
   // Connect-style middleware mounted at /api.
   async function api(req, res) {
-    if (!sameOriginJson(req, appOrigin)) {
+    if (!sameOriginJson(req, appOrigin, extraOrigins)) {
       const origin = String(req.headers?.origin || '').slice(0, 200);
       if (origin && refusedOrigins.size < 50 && !refusedOrigins.has(origin)) {
         refusedOrigins.add(origin);
-        (options.log || console).warn?.(`[api] Refused a ${req.method} request from ${origin}: it is neither APP_URL (${appOrigin || 'not set'}) nor this server. If ${origin} is your site, set APP_URL to exactly that address.`);
+        (options.log || console).warn?.(`[api] Refused a ${req.method} request from ${origin}: it is neither APP_URL (${appOrigin || 'not set'}), ALLOWED_ORIGINS nor this server. If ${origin} is your production site, set APP_URL to it; to trust this one extra address, add it to ALLOWED_ORIGINS.`);
       }
       // A real visitor on another copy of the site (e.g. a Vercel deployment URL) is told where the app lives.
       const where = appOrigin && origin ? ` Open ${appOrigin} and try again.` : '';

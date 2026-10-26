@@ -57,6 +57,7 @@ Railway → the **first-job-ai** service (not Postgres) → **Variables** → **
 | `NODE_ENV` | `production` |
 | `TRUST_PROXY` | `true` |
 | `APP_URL` | For now `https://example.com`. You'll set the real Vercel address in step 6. |
+| `ALLOWED_ORIGINS` | Optional. Leave it out unless you test on a Vercel preview: then the preview's exact `https://` address (e.g. the branch alias `https://<project>-git-<branch>-<team>.vercel.app`), comma-separated. No wildcards. Reset links always use `APP_URL`. |
 | `ANTHROPIC_API_KEY` | Your Anthropic key (`sk-ant-…`) |
 | `AI_MODEL` | `claude-sonnet-5-5` (optional) |
 | `JSEARCH_API_KEY` | Your JSearch key |

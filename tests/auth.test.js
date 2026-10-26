@@ -2,6 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createApi, sameOriginJson } from '../server/api.js';
 import { createResetToken, hashPassword, validatePassword, verifyPassword } from '../server/auth.js';
+import { checkConfig } from '../server/config.js';
+import { allowedOrigins } from '../server/http.js';
 import { MIGRATIONS, openDatabase } from '../server/db.js';
 import { sanitizeUserData } from '../server/dataHandler.js';
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -257,6 +259,37 @@ test('forgot password: allowed from APP_URL, refused from a Vercel deployment UR
   assert.equal(sent.length, 1, 'the email is sent');
   assert.match(sent[0].text, /^[\s\S]*https:\/\/first-job-ai-steel\.vercel\.app\/reset-password\?token=/, 'the link uses the production domain');
   assert.equal((await call(api, 'POST', '/auth/forgot', { email: 'owner@example.com' }, viaVercel('https://evil.example'))).status, 403);
+});
+
+test('ALLOWED_ORIGINS trusts only the exact preview addresses listed; reset links still use APP_URL', async () => {
+  const preview = 'https://first-job-ai-git-stripe-billing-albertos-projects-2fbaa380.vercel.app';
+  const env = {
+    NODE_ENV: 'production',
+    APP_URL: 'https://first-job-ai-steel.vercel.app',
+    RESEND_API_KEY: 're_test',
+    EMAIL_FROM: 'First Job AI <no-reply@example.com>',
+    ALLOWED_ORIGINS: ` ${preview}/ , https://*.vercel.app, http://insecure.example, https://with.path.example/app`,
+  };
+  const { origins, invalid } = allowedOrigins(env);
+  assert.deepEqual(origins, [preview], 'trailing slash and spaces are fine');
+  assert.deepEqual(invalid, ['https://*.vercel.app', 'http://insecure.example', 'https://with.path.example/app']);
+  assert.equal(checkConfig(env).warnings.filter((w) => w.startsWith('ALLOWED_ORIGINS entry')).length, 3);
+
+  const db = await openDatabase(':memory:');
+  const api = createApi(env, { db, log: { info() {}, warn() {}, error() {} } });
+  const from = (origin) => ({ headers: { host: 'first-job-ai-production.up.railway.app', origin } });
+  await call(api, 'POST', '/auth/signup', { email: 'owner@example.com', password: 'a long pass phrase' }, from(env.APP_URL));
+  const sent = [];
+  const res = await withFetch(
+    async (url, opts) => (sent.push(JSON.parse(opts.body)), jsonResponse({ id: 'email_1' })),
+    () => call(api, 'POST', '/auth/forgot', { email: 'owner@example.com' }, from(preview)),
+  );
+  assert.equal(res.status, 200, 'the listed preview may request a reset');
+  assert.match(sent[0].text, /https:\/\/first-job-ai-steel\.vercel\.app\/reset-password\?token=/, 'the link opens the production site');
+  for (const origin of ['https://first-job-gwer2nppe-albertos-projects-2fbaa380.vercel.app', 'https://evil.vercel.app', 'http://insecure.example']) {
+    assert.equal((await call(api, 'POST', '/auth/forgot', { email: 'owner@example.com' }, from(origin))).status, 403, `${origin} stays refused`);
+  }
+  assert.equal(sameOriginJson({ method: 'POST', headers: { 'content-type': 'application/json', host: 'h', origin: preview } }, env.APP_URL), false, 'not trusted without ALLOWED_ORIGINS');
 });
 
 test('password reset is refused in production without email, and cookies are Secure', async () => {

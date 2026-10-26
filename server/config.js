@@ -4,7 +4,7 @@
 // in the UI. Only settings that are unsafe in production are errors.
 
 import { COUNTRIES, PROVIDERS, resolveProvider } from './jobsHandler.js';
-import { isProduction } from './http.js';
+import { allowedOrigins, isProduction } from './http.js';
 import { billingConfig } from './billing.js';
 
 const SECRET_NAMES = ['DATABASE_URL', 'ANTHROPIC_API_KEY', 'JSEARCH_API_KEY', 'RAPIDAPI_KEY', 'RESEND_API_KEY', 'STRIPE_SECRET_KEY', 'STRIPE_WEBHOOK_SECRET'];
@@ -78,6 +78,10 @@ export function checkConfig(env = {}) {
   }
   if (billing.configured && production && blank(env.APP_URL)) {
     warnings.push('APP_URL is not set: Stripe Checkout can’t send people back to the site, so Premium checkout is turned off.');
+  }
+
+  for (const entry of allowedOrigins(env).invalid) {
+    warnings.push(`ALLOWED_ORIGINS entry "${entry}" is ignored: use an exact https:// address with no path or wildcard, e.g. https://my-app-git-main-me.vercel.app`);
   }
 
   // Password-reset email (Resend)
