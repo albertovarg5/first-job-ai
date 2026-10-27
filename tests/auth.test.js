@@ -43,7 +43,7 @@ test('sign up, session cookie, me, sign out', async () => {
   const { res, cookie } = await signUp(api, 'Sam@Example.com');
   assert.equal(res.status, 201);
   assert.equal(res.body.user.email, 'sam@example.com');
-  const setCookie = res.headers['set-cookie'];
+  const setCookie = String(res.headers['set-cookie']);
   assert.match(setCookie, /HttpOnly/);
   assert.match(setCookie, /SameSite=Lax/);
   assert.ok(!/Secure/.test(setCookie), 'no Secure flag in development');
@@ -171,7 +171,7 @@ test('password reset: token works once, signs out other sessions', async () => {
 });
 
 test('a reset link made on the server (npm run reset-link) recovers the account and keeps its data', async () => {
-  const { api, db } = await setup({ NODE_ENV: 'production' });
+  const { api, db } = await setup({ NODE_ENV: 'production', EMAIL_VERIFICATION: 'false' });
   const { cookie: oldCookie } = await signUp(api, 'owner@example.com');
   await call(api, 'PUT', '/data', { baseRevision: 0, data: { profile: { name: 'Owner' } } }, { headers: { cookie: oldCookie } });
   const { id } = await db.one('SELECT id FROM users WHERE email = $1', ['owner@example.com']);
@@ -241,7 +241,7 @@ test('a reset link used by two requests at once changes the password only once',
 test('forgot password: allowed from APP_URL, refused from a Vercel deployment URL with a pointer to the real site', async () => {
   const sent = [];
   const db = await openDatabase(':memory:');
-  const env = { NODE_ENV: 'production', APP_URL: 'https://first-job-ai-steel.vercel.app', RESEND_API_KEY: 're_test', EMAIL_FROM: 'First Job AI <no-reply@example.com>' };
+  const env = { NODE_ENV: 'production', EMAIL_VERIFICATION: 'false', APP_URL: 'https://first-job-ai-steel.vercel.app', RESEND_API_KEY: 're_test', EMAIL_FROM: 'First Job AI <no-reply@example.com>' };
   const api = createApi(env, { db, log: { info() {}, warn() {}, error() {} } });
   const viaVercel = (origin) => ({ headers: { host: 'first-job-ai-production.up.railway.app', origin } });
   await call(api, 'POST', '/auth/signup', { email: 'owner@example.com', password: 'a long pass phrase' }, viaVercel(env.APP_URL));
@@ -253,7 +253,11 @@ test('forgot password: allowed from APP_URL, refused from a Vercel deployment UR
 
   const ok = await withFetch(
     async (url, opts) => (sent.push(JSON.parse(opts.body)), jsonResponse({ id: 'email_1' })),
-    () => call(api, 'POST', '/auth/forgot', { email: 'owner@example.com' }, viaVercel(env.APP_URL)),
+    async () => {
+      const r = await call(api, 'POST', '/auth/forgot', { email: 'owner@example.com' }, viaVercel(env.APP_URL));
+      await api.settled(); // The email goes out after the response.
+      return r;
+    },
   );
   assert.equal(ok.status, 200);
   assert.equal(sent.length, 1, 'the email is sent');
@@ -265,6 +269,7 @@ test('ALLOWED_ORIGINS trusts only the exact preview addresses listed; reset link
   const preview = 'https://first-job-ai-git-stripe-billing-albertos-projects-2fbaa380.vercel.app';
   const env = {
     NODE_ENV: 'production',
+    EMAIL_VERIFICATION: 'false',
     APP_URL: 'https://first-job-ai-steel.vercel.app',
     RESEND_API_KEY: 're_test',
     EMAIL_FROM: 'First Job AI <no-reply@example.com>',
@@ -282,7 +287,11 @@ test('ALLOWED_ORIGINS trusts only the exact preview addresses listed; reset link
   const sent = [];
   const res = await withFetch(
     async (url, opts) => (sent.push(JSON.parse(opts.body)), jsonResponse({ id: 'email_1' })),
-    () => call(api, 'POST', '/auth/forgot', { email: 'owner@example.com' }, from(preview)),
+    async () => {
+      const r = await call(api, 'POST', '/auth/forgot', { email: 'owner@example.com' }, from(preview));
+      await api.settled();
+      return r;
+    },
   );
   assert.equal(res.status, 200, 'the listed preview may request a reset');
   assert.match(sent[0].text, /https:\/\/first-job-ai-steel\.vercel\.app\/reset-password\?token=/, 'the link opens the production site');
@@ -293,11 +302,14 @@ test('ALLOWED_ORIGINS trusts only the exact preview addresses listed; reset link
 });
 
 test('password reset is refused in production without email, and cookies are Secure', async () => {
-  const { api } = await setup({ NODE_ENV: 'production' });
+  const { api } = await setup({ NODE_ENV: 'production', EMAIL_VERIFICATION: 'false' });
   const res = await call(api, 'POST', '/auth/forgot', { email: 'x@example.com' });
   assert.equal(res.status, 501);
   const { res: signup } = await signUp(api, 'p@example.com');
-  assert.match(signup.headers['set-cookie'], /Secure/);
+  for (const cookie of [].concat(signup.headers['set-cookie'])) assert.match(cookie, /; HttpOnly; Secure$/);
+  // With email confirmation on (the production default), sign-up needs email to be set up.
+  const { api: strict } = await setup({ NODE_ENV: 'production' });
+  assert.equal((await signUp(strict, 'q@example.com')).res.status, 503);
 });
 
 test('change password and delete account need the current password', async () => {

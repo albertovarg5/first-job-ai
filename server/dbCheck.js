@@ -29,7 +29,7 @@ export async function inspectAccounts(db, email = '') {
   const count = async (sql) => (await db.one(sql, [user.id, now])).n;
   lines.push('Account for the given email: FOUND');
   lines.push(`  Created: ${day(user.created_at)} · password last changed: ${day(user.password_changed_at)}`);
-  lines.push('  Status: can sign in with email and password (this app has no activation step)');
+  lines.push('  Status: can sign in with email and password (a new account only exists once its email was confirmed)');
   lines.push(`  Signed-in sessions: ${await count('SELECT COUNT(*)::int AS n FROM sessions WHERE user_id = $1 AND expires_at > $2')}`);
   lines.push(`  Reset links: ${await count('SELECT COUNT(*)::int AS n FROM password_resets WHERE user_id = $1 AND used_at IS NULL AND expires_at > $2')} usable now, ${await count('SELECT COUNT(*)::int AS n FROM password_resets WHERE user_id = $1 AND (used_at IS NOT NULL OR expires_at <= $2)')} expired or used`);
   lines.push(`  Saved app data: ${(await db.one('SELECT 1 AS x FROM user_data WHERE user_id = $1', [user.id])) ? 'yes' : 'no'}`);

@@ -261,7 +261,7 @@ test('checkout: a price that isn’t an active recurring price in Stripe is neve
 
 test('checkout: Stripe sends people back to APP_URL, never to a spoofed Host or X-Forwarded-Host', async () => {
   const site = 'https://first-job-ai-steel.vercel.app';
-  const { api, stripe, signUp, as } = await setup({ NODE_ENV: 'production', APP_URL: site });
+  const { api, stripe, signUp, as } = await setup({ NODE_ENV: 'production', EMAIL_VERIFICATION: 'false', APP_URL: site });
   const user = await signUp('return@example.com');
   const headers = { ...as(user).headers, host: 'evil.example', 'x-forwarded-host': 'evil.example', origin: site };
   assert.equal((await call(api, 'POST', '/billing/checkout', { interval: 'year' }, { headers })).status, 200);

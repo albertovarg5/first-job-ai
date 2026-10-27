@@ -16,7 +16,7 @@ import Settings from './pages/Settings.jsx';
 import { BillingCancel, BillingSuccess } from './pages/Billing.jsx';
 import Pricing from './pages/Pricing.jsx';
 import NotFound from './pages/NotFound.jsx';
-import { ForgotPassword, ResetPassword, SignIn, SignUp } from './pages/Auth.jsx';
+import { ForgotPassword, ResetPassword, SignIn, SignUp, VerifyEmail } from './pages/Auth.jsx';
 
 export default function App() {
   return (
@@ -27,6 +27,7 @@ export default function App() {
       <Route path="/signup" element={<SignUp />} />
       <Route path="/forgot-password" element={<ForgotPassword />} />
       <Route path="/reset-password" element={<ResetPassword />} />
+      <Route path="/verify-email" element={<VerifyEmail />} />
       <Route element={<AppLayout />}>
         <Route path="/dashboard" element={<Dashboard />} />
         <Route path="/resume" element={<ResumeBuilder />} />

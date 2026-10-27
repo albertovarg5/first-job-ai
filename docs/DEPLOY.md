@@ -67,7 +67,7 @@ Railway → the **first-job-ai** service (not Postgres) → **Variables** → **
 | `STRIPE_PRICE_YEARLY` | **Test** yearly `price_…` ($79/year) |
 | `STRIPE_WEBHOOK_SECRET` | Leave it out for now (step 8) |
 | `STRIPE_ALLOW_LIVE` | `false` |
-| `RESEND_API_KEY`, `EMAIL_FROM` | Optional, for password-reset email (step 11) |
+| `RESEND_API_KEY`, `EMAIL_FROM` | Needed for **sign-up** (new accounts confirm their email first) and password reset (step 11). Until both are set, existing accounts can sign in but nobody can sign up. |
 
 Don't set `PORT`: Railway provides it and the app uses it.
 
@@ -87,6 +87,22 @@ Then **Settings → Networking → Generate Domain**. You get an address like `f
    If the log says `DATABASE_URL is not set`, go back to step 4. (`localhost` in that line is normal: it's the port inside Railway.)
 2. Open `https://YOUR-BACKEND.up.railway.app/healthz` in your browser. It must show `ok`. This also proves the database answers.
 3. Open `https://YOUR-BACKEND.up.railway.app/` → it says "This is the First Job AI API server". That's correct: the app itself comes from Vercel.
+
+### 5a. Check client IPs (once, for rate limiting)
+
+Rate limits per visitor address only work if the server knows which forwarding headers it can trust. Railway doesn't document whether its proxy replaces or appends `X-Forwarded-For`, so check it once on the live backend:
+
+1. Railway → service → **Variables**: add `DEBUG_PROXY_HEADERS` = `true` (Railway redeploys). The next 20 API requests are logged.
+2. Look up your own public IP address (search "what is my IP").
+3. Open your Vercel site once (this makes a request through Vercel).
+4. From PowerShell, call the backend **directly** with made-up headers:
+   ```powershell
+   curl.exe -s https://YOUR-BACKEND.up.railway.app/api/config -H "X-Forwarded-For: 1.1.1.1" -H "X-Real-IP: 2.2.2.2" -H "X-Vercel-Forwarded-For: 3.3.3.3"
+   ```
+5. Railway → **Deployments → View logs**, find the `[proxy]` lines:
+   - **Direct request:** `peer=` must be **your real IP**, not `1.1.1.1`. Then the proxy writes the last `X-Forwarded-For` entry itself and attackers can't forge the address the extra limits use. If `peer=1.1.1.1`, set `TRUST_PROXY` = `false` (address limits then mostly stop working; the per-account, per-email and email-verification protections don't depend on addresses).
+   - **Request through Vercel:** `visitor=` should be **your real IP**. If it shows another address but `x-vercel-forwarded-for` shows yours, set `CLIENT_IP_HEADER` = `x-vercel-forwarded-for`.
+6. Delete `DEBUG_PROXY_HEADERS` (the log lines contain IP addresses).
 
 ### 5b. Move your existing accounts and data into PostgreSQL (optional, recommended)
 
@@ -279,6 +295,11 @@ Copy each live price ID (`price_…`).
 | `ANTHROPIC_API_KEY` | `sk-ant-...` | Secret |
 | `AI_MODEL` | `claude-sonnet-5-5` | Optional |
 | `AI_FREE_MONTHLY_LIMIT` / `AI_PREMIUM_MONTHLY_LIMIT` | *(blank = 20 / 200)* | Optional |
+| `AI_NEW_ACCOUNT_DAILY_TOTAL` | *(blank = 300)* | Optional: daily AI requests shared by Free accounts younger than 7 days |
+| `AI_FREE_DAILY_TOTAL` | *(blank = 3000)* | Optional: daily AI backstop for all Free accounts together |
+| `EMAIL_VERIFICATION` | *(blank = on in production)* | Optional: `false` lets people sign up without confirming their email (not recommended) |
+| `CLIENT_IP_HEADER` | *(blank)* | Only if step 5a says so: `x-vercel-forwarded-for` |
+| `DEBUG_PROXY_HEADERS` | *(blank)* | Only during step 5a |
 | `JSEARCH_API_KEY` | `your-jsearch-key` | Secret |
 | `JSEARCH_MONTHLY_LIMIT` | e.g. `200` | Your plan's allowance |
 | `RESEND_API_KEY` / `EMAIL_FROM` | `re_...` / `First Job AI <no-reply@yourdomain.com>` | Password reset |

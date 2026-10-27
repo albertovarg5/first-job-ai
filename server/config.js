@@ -4,7 +4,7 @@
 // in the UI. Only settings that are unsafe in production are errors.
 
 import { COUNTRIES, PROVIDERS, resolveProvider } from './jobsHandler.js';
-import { allowedOrigins, isProduction } from './http.js';
+import { allowedOrigins, envFlag, isProduction } from './http.js';
 import { billingConfig } from './billing.js';
 
 const SECRET_NAMES = ['DATABASE_URL', 'ANTHROPIC_API_KEY', 'JSEARCH_API_KEY', 'RAPIDAPI_KEY', 'RESEND_API_KEY', 'STRIPE_SECRET_KEY', 'STRIPE_WEBHOOK_SECRET'];
@@ -100,6 +100,9 @@ export function checkConfig(env = {}) {
     if (blank(env.APP_URL)) warnings.push('APP_URL is not set: password reset is turned off in production. Set it to the public https:// address of the site.');
     else if (!/^https:\/\//.test(String(env.APP_URL).trim())) warnings.push('APP_URL should start with https:// in production.');
     if (!hasResendKey || !hasFrom) warnings.push('RESEND_API_KEY / EMAIL_FROM are not both set: password reset is turned off in production.');
+    if ((!hasResendKey || !hasFrom || blank(env.APP_URL)) && envFlag(env.EMAIL_VERIFICATION, true)) {
+      warnings.push('New accounts confirm their email first (EMAIL_VERIFICATION), which needs RESEND_API_KEY, EMAIL_FROM and APP_URL: until they are set, sign-up is turned off. Existing accounts can still sign in.');
+    }
     // Accounts and subscriptions must live in a real database: the app's own disk is erased on every deploy.
     // On a host (Railway sets RAILWAY_PROJECT_ID) that is fatal; `npm start` on your own computer may use the local database.
     if (blank(env.DATABASE_URL)) {

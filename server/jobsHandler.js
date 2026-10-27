@@ -16,7 +16,7 @@
 //   GET /status  -> { configured, provider, monthlyLimit, usedThisMonth, country }
 //   GET /search  -> { jobs[], page, hasMore, cursor, cached, source }
 
-import { HttpError, pathOf, queryOf, send } from './http.js';
+import { HttpError, isProduction, pathOf, queryOf, send } from './http.js';
 
 export const DATE_POSTED = ['all', 'today', '3days', 'week', 'month'];
 export const EMPLOYMENT_TYPES = ['FULLTIME', 'PARTTIME', 'INTERN', 'CONTRACTOR'];
@@ -222,6 +222,9 @@ export function createJobsHandler(env = {}, { usage = memoryUsageStore() } = {})
   const monthlyLimit = Math.max(0, Number(env.JSEARCH_MONTHLY_LIMIT) || 0);
   const cache = new Map();
   let lastRemaining = null;
+  // In production, setup problems are logged for the owner and visitors get a plain message.
+  const production = isProduction(env);
+  const OWNER_ONLY = new Set(['not_configured', 'invalid_key']);
 
   function fromCache(key) {
     const hit = cache.get(key);
@@ -278,6 +281,8 @@ export function createJobsHandler(env = {}, { usage = memoryUsageStore() } = {})
   return async function jobsHandler(req, res, next) {
     const path = pathOf(req);
     if (req.method === 'GET' && path === '/status') {
+      // Provider, quota and usage are for the owner (npm run dev), not the public.
+      if (production) return send(res, 200, { configured: Boolean(apiKey), country: defaultCountry });
       return send(res, 200, {
         configured: Boolean(apiKey),
         provider: apiKey ? PROVIDERS[provider].label : null,
@@ -293,6 +298,10 @@ export function createJobsHandler(env = {}, { usage = memoryUsageStore() } = {})
         const params = parseSearchParams(queryOf(req), { defaultCountry });
         return send(res, 200, await search(params));
       } catch (err) {
+        if (err instanceof HttpError && production && OWNER_ONLY.has(err.code)) {
+          console.error(`[jobs] ${err.code}: ${err.message}`);
+          return send(res, err.status, { error: 'Job search is temporarily unavailable. Please try again later.', code: err.code });
+        }
         if (err instanceof HttpError) return send(res, err.status, { error: err.message, code: err.code });
         console.error('[jobs] Unexpected error:', err);
         return send(res, 500, { error: ERRORS.upstream, code: 'server_error' });

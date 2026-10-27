@@ -15,7 +15,14 @@
 //   POST /api/ai/summary    -> { summary }
 //   POST /api/ai/analyze    -> { summary, mustHave[], niceToHave[], responsibilities[], keywords[], questionsToAsk[] }
 
-const HONESTY_RULES = `Rules you must always follow:
+import { HttpError, isProduction, readJson, send } from './http.js';
+
+// Problems only the site owner can fix. In production their details (and Anthropic's
+// own error text) go to the server log; visitors get UNAVAILABLE.
+const OPERATOR_ERRORS = new Set(['invalid_key', 'permission', 'bad_model', 'no_credit', 'upstream', 'not_configured']);
+const UNAVAILABLE = 'AI is temporarily unavailable. Please try again later, or use Basic mode in the meantime.';
+
+const HONESTY_RULES =`Rules you must always follow:
 - Use only facts the user provided. Never invent numbers, percentages, results, tools, employers, titles, dates, responsibilities or achievements.
 - If something useful is missing, say what the user could add instead of making it up.
 - Write in clear, plain English suitable for an entry-level job seeker.
@@ -144,40 +151,9 @@ const MAX_TOKENS = 16000;
 // user still gets this server's clear "took too long" message, not Vercel's bare 504.
 export const TIMEOUT_MS = 100000;
 
-class AiError extends Error {
-  constructor(status, message, code) {
-    super(message);
-    this.status = status;
-    this.code = code;
-  }
-}
+class AiError extends HttpError {}
 
 const KEY_REJECTED = 'The API key in your .env file was rejected. Check that it was copied correctly.';
-
-function send(res, status, data) {
-  res.statusCode = status;
-  res.setHeader('Content-Type', 'application/json');
-  res.setHeader('Cache-Control', 'no-store');
-  res.end(JSON.stringify(data));
-}
-
-function readJson(req) {
-  return new Promise((resolve, reject) => {
-    let body = '';
-    req.on('data', (chunk) => {
-      body += chunk;
-      if (body.length > 100000) reject(new AiError(413, 'This request is too large.', 'too_large'));
-    });
-    req.on('end', () => {
-      try {
-        resolve(body ? JSON.parse(body) : {});
-      } catch {
-        reject(new AiError(400, 'The request was not valid JSON.', 'invalid_json'));
-      }
-    });
-    req.on('error', reject);
-  });
-}
 
 export function extractJson(text) {
   const cleaned = String(text || '').replace(/```(?:json)?/g, '').trim();
@@ -225,6 +201,12 @@ export function createAiHandler(env = {}) {
   const model = (env.AI_MODEL || 'claude-sonnet-5-5').trim();
   const baseUrl = (env.ANTHROPIC_BASE_URL || 'https://api.anthropic.com').replace(/\/$/, '');
   const hasKey = apiKey.length > 0;
+  const production = isProduction(env);
+  const forVisitor = (err) => {
+    if (!production || !OPERATOR_ERRORS.has(err.code)) return err;
+    console.error(`[ai] ${err.code}: ${err.message}`);
+    return new AiError(err.status, UNAVAILABLE, err.code);
+  };
 
   // Verify the key once (and again after 5 minutes) using the free models list.
   let verified = null; // { at, ok, error }
@@ -273,7 +255,7 @@ export function createAiHandler(env = {}) {
       if (!response.ok) {
         const err = aiErrorFor(response.status, data, model);
         if (err.code === 'invalid_key') verified = { at: Date.now(), ok: false, error: KEY_REJECTED };
-        throw err;
+        throw forVisitor(err);
       }
       if (data.stop_reason === 'refusal') {
         throw new AiError(422, 'The AI declined this request. Try rewording it, or use Basic mode.', 'refusal');
@@ -300,12 +282,13 @@ export function createAiHandler(env = {}) {
     const path = (req.url || '/').split('?')[0].replace(/\/+$/, '') || '/';
     if (req.method === 'GET' && path === '/status') {
       const v = await verifyKey();
-      return send(res, 200, { connected: v.ok, model: v.ok ? model : null, error: v.error });
+      return send(res, 200, { connected: v.ok, model: v.ok ? model : null, error: v.error && production ? UNAVAILABLE : v.error });
     }
     const task = path.slice(1);
     if (req.method === 'POST' && TASKS[task]) {
       if (!hasKey) {
-        return send(res, 503, { error: 'AI is not connected. Add ANTHROPIC_API_KEY to your .env file and restart the app.', code: 'not_configured' });
+        const err = forVisitor(new AiError(503, 'AI is not connected. Add ANTHROPIC_API_KEY to your .env file and restart the app.', 'not_configured'));
+        return send(res, err.status, { error: err.message, code: err.code });
       }
       try {
         const payload = await readJson(req);
@@ -315,7 +298,7 @@ export function createAiHandler(env = {}) {
         const result = await callModel(task, payload);
         return send(res, 200, result);
       } catch (err) {
-        if (err instanceof AiError) return send(res, err.status, { error: err.message, code: err.code });
+        if (err instanceof HttpError) return send(res, err.status, { error: err.message, code: err.code });
         console.error('[ai] Unexpected error:', err);
         return send(res, 502, { error: 'AI request failed.', code: 'server_error' });
       }

@@ -9,7 +9,7 @@ import { createDataHandler } from './dataHandler.js';
 import { dbUsageStore, openDatabase } from './db.js';
 import { createJobsHandler } from './jobsHandler.js';
 import { createAiQuota, limitReachedMessage, planLimits } from './plans.js';
-import { RateLimiter, allowedOrigins, clientIp, envFlag, isProduction, pathOf, proxySettings, rateLimited, send } from './http.js';
+import { allowedOrigins, clientIp, createLimits, envFlag, isProduction, pathOf, peerIp, proxySettings, rateLimited, send } from './http.js';
 
 // State-changing requests must be JSON and, when the browser says where they
 // came from, come from this site. Together with SameSite cookies this blocks
@@ -47,15 +47,14 @@ async function build(env, options) {
   const ai = createAiHandler(env);
   const jobs = createJobsHandler(env, { usage: dbUsageStore(db) });
   const data = createDataHandler({ db, requireUser: auth.requireUser });
-  const aiLimiter = new RateLimiter({ limit: 40, windowMs: 10 * 60 * 1000 });
-  const jobsLimiter = new RateLimiter({ limit: 30, windowMs: 10 * 60 * 1000 });
+  const limits = createLimits(db);
   const quota = createAiQuota(db, env, { planOf: billing.planOf, now: options.now });
   const isAiCall = (req) => req.method === 'POST';
 
-  const paid = (limiter, isCall) => (req, user) => {
+  const paid = (name, rule, isCall) => async (req, user) => {
     if (!isCall(req)) return null;
     if (requireAuthForApis && !user) return [401, { error: 'Sign in to use this feature.', code: 'auth_required' }];
-    const r = limiter.take(user ? `u:${user.id}` : `ip:${clientIp(req, trustProxy)}`);
+    const r = await limits.take(`${name}:${user ? `u:${user.id}` : `ip:${clientIp(req, trustProxy)}`}`, rule);
     return r.ok ? null : r;
   };
 
@@ -70,10 +69,11 @@ async function build(env, options) {
       ['/auth', auth.handler, null, null],
       ['/data', data, null, null],
       ['/billing', billing.handler, null, null],
-      ['/ai', ai, paid(aiLimiter, isAiCall), isAiCall],
-      ['/jobs', jobs, paid(jobsLimiter, (req) => pathOf(req) === '/search'), null],
+      ['/ai', ai, paid('ai', { limit: 40, windowMs: 10 * 60 * 1000 }, isAiCall), isAiCall],
+      ['/jobs', jobs, paid('jobs', { limit: 30, windowMs: 10 * 60 * 1000 }, (req) => pathOf(req) === '/search'), null],
     ],
     getUser: auth.getUser,
+    settled: auth.settled,
   };
 }
 
@@ -89,8 +89,22 @@ export function createApi(env = {}, options = {}) {
   // Each refused origin is logged once (capped), so a wrong APP_URL shows up in the server log.
   const refusedOrigins = new Set();
 
+  // DEBUG_PROXY_HEADERS=true logs the forwarding headers of the next 20 requests, to check
+  // which address headers the hosting proxies really set (docs/DEPLOY.md, "Check client IPs").
+  let proxyLogsLeft = envFlag(env.DEBUG_PROXY_HEADERS, false) ? 20 : 0;
+
   // Connect-style middleware mounted at /api.
   async function api(req, res) {
+    if (proxyLogsLeft > 0) {
+      proxyLogsLeft -= 1;
+      // Only these three address headers and the socket: never cookies, Authorization, the URL or the body.
+      const h = (name) => JSON.stringify(String(req.headers?.[name] ?? '').slice(0, 200));
+      const ip = (v) => (/^[0-9a-f:.]{2,45}$/i.test(String(v)) ? v : '"(not an IP address)"');
+      const trust = proxySettings(env);
+      (options.log || console).info?.(
+        `[proxy] ${req.method} x-forwarded-for=${h('x-forwarded-for')} x-real-ip=${h('x-real-ip')} x-vercel-forwarded-for=${h('x-vercel-forwarded-for')} socket=${ip(req.socket?.remoteAddress)} -> visitor=${ip(clientIp(req, trust))} peer=${ip(peerIp(req, trust))}`,
+      );
+    }
     if (!sameOriginJson(req, appOrigin, extraOrigins)) {
       const origin = String(req.headers?.origin || '').slice(0, 200);
       if (origin && refusedOrigins.size < 50 && !refusedOrigins.has(origin)) {
@@ -129,7 +143,7 @@ export function createApi(env = {}, options = {}) {
       try {
         if (gate) {
           user = await app.getUser(req);
-          const blocked = gate(req, user);
+          const blocked = await gate(req, user);
           if (Array.isArray(blocked)) return send(res, ...blocked);
           if (blocked) return rateLimited(res, blocked.retryAfter);
         }
@@ -137,8 +151,10 @@ export function createApi(env = {}, options = {}) {
         if (metered?.(req) && user) {
           reservation = await app.quota.reserve(user.id);
           if (!reservation.ok) {
-            const usage = reservation.usage;
+            const { usage, busy, retryAfter } = reservation;
             reservation = null;
+            if (busy === 'new') return rateLimited(res, retryAfter, 'AI for new accounts is very busy today, so it’s paused until midnight UTC. Your monthly allowance is untouched, and the Basic-mode tools still work.');
+            if (busy) return rateLimited(res, retryAfter, 'Free AI requests are paused for the rest of today because of very high demand. They come back at midnight UTC, and the Basic-mode tools still work.');
             const upgrade = { upgrade: app.billingConfigured, premiumLimit: app.premiumLimit };
             return send(res, 403, { error: limitReachedMessage(usage, upgrade), code: 'ai_limit_reached', usage });
           }
@@ -147,7 +163,7 @@ export function createApi(env = {}, options = {}) {
         succeeded = res.statusCode === 200;
         return result;
       } finally {
-        if (reservation && !succeeded) await app.quota.refund(user.id, reservation.period);
+        if (reservation && !succeeded) await app.quota.refund(user.id, reservation);
         req.url = originalUrl;
       }
     }
@@ -155,6 +171,8 @@ export function createApi(env = {}, options = {}) {
   }
 
   api.ready = () => (ready ??= build(env, options));
+  // Resolves once emails queued so far were handed to the email service (tests).
+  api.settled = async () => (await api.ready()).settled();
   // For health checks: throws if the database can't be read.
   api.health = async () => {
     const app = await api.ready();

@@ -23,7 +23,7 @@
 import Stripe from 'stripe';
 import { createBillingStore, isOpenStatus, subscriptionFields } from './billingStore.js';
 import { planLimits } from './plans.js';
-import { HttpError, RateLimiter, envFlag, isProduction, pathOf, rateLimited, readJson, readRaw, send } from './http.js';
+import { HttpError, createLimits, envFlag, isProduction, pathOf, rateLimited, readJson, readRaw, send } from './http.js';
 
 const PRICE_RE = /^price_[A-Za-z0-9]+$/;
 const SESSION_RE = /^cs_(test|live)_[A-Za-z0-9]+$/;
@@ -101,24 +101,24 @@ function hostedUrl(url, host) {
 export function createBilling({ db, env = {}, requireUser, stripe, log = console, now = () => new Date() }) {
   const config = billingConfig(env);
   const store = createBillingStore(db, config.secretKey ? config.live : null);
-  const limiter = new RateLimiter({ limit: 10, windowMs: 10 * 60 * 1000 });
+  const limits = createLimits(db);
   let client = stripe || null;
   const stripeClient = () => {
     if (!client) client = new Stripe(config.secretKey, { maxNetworkRetries: 2, timeout: 20000 });
     return client;
   };
   const priceCache = new Map(); // interval -> { at, value }
-  // Users with a checkout being created right now: a second click or tab waits its turn instead of
-  // opening a second Checkout that could become a second subscription.
-  // shortcut: in memory, so it guards one server process; use a database lock if you run several.
-  const checkoutsInProgress = new Set();
+  // A checkout being created right now holds a 1-minute lease in rate_limits (shared by all
+  // server instances): a second click or tab waits its turn instead of opening a second
+  // Checkout that could become a second subscription. The lease ends early when done.
+  const CHECKOUT_LEASE = { limit: 1, windowMs: 60 * 1000 };
 
   function requireConfigured() {
     if (!config.configured) throw new HttpError(503, 'Premium isn’t available on this server yet.', 'billing_unavailable');
   }
 
-  function limit(user) {
-    const r = limiter.take(`billing:${user.id}`);
+  async function limit(user) {
+    const r = await limits.take(`billing:${user.id}`, { limit: 10, windowMs: 10 * 60 * 1000 });
     if (!r.ok) throw Object.assign(new HttpError(429, 'Too many billing requests. Please wait a few minutes.', 'rate_limited'), { retryAfter: r.retryAfter });
   }
 
@@ -321,22 +321,22 @@ export function createBilling({ db, env = {}, requireUser, stripe, log = console
 
     'POST /checkout': async (req, res) => {
       const user = await requireUser(req);
-      limit(user);
+      await limit(user);
       requireConfigured();
-      if (checkoutsInProgress.has(user.id)) {
+      const lease = `checkout-lease:${user.id}`;
+      if (!(await limits.take(lease, CHECKOUT_LEASE)).ok) {
         throw new HttpError(409, 'Your checkout is already being opened. Please wait a moment.', 'checkout_in_progress');
       }
-      checkoutsInProgress.add(user.id);
       try {
         return await createCheckout(req, res, user);
       } finally {
-        checkoutsInProgress.delete(user.id);
+        await limits.clear(lease);
       }
     },
 
     'POST /portal': async (req, res) => {
       const user = await requireUser(req);
-      limit(user);
+      await limit(user);
       requireConfigured();
       const customer = await store.customerOf(user.id);
       if (!customer) throw new HttpError(404, 'You don’t have a subscription to manage yet.', 'no_billing_account');
@@ -363,7 +363,7 @@ export function createBilling({ db, env = {}, requireUser, stripe, log = console
     // subscription. The webhook does the same thing independently.
     'POST /sync': async (req, res) => {
       const user = await requireUser(req);
-      limit(user);
+      await limit(user);
       requireConfigured();
       const body = await readJson(req, 1000);
       const sessionId = String(body.sessionId || '');

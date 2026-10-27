@@ -81,6 +81,30 @@ export const MIGRATIONS = [
      type TEXT NOT NULL,
      processed_at TEXT NOT NULL
    );`,
+  // Rate limits shared by every server instance and kept across restarts (window_start in ms),
+  // session inactivity, browsers that signed in successfully before, and sign-ups waiting
+  // for their email to be confirmed (the account is only created once it is).
+  `CREATE TABLE rate_limits (
+     key TEXT PRIMARY KEY,
+     window_start BIGINT NOT NULL,
+     count INTEGER NOT NULL
+   );
+   ALTER TABLE sessions ADD COLUMN last_seen_at TEXT;
+   -- Sessions open at upgrade time count as used now, so nobody is signed out by the deploy.
+   UPDATE sessions SET last_seen_at = to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"');
+   CREATE TABLE trusted_devices (
+     token_hash TEXT PRIMARY KEY,
+     user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+     expires_at TEXT NOT NULL
+   );
+   CREATE INDEX trusted_devices_user ON trusted_devices(user_id);
+   CREATE TABLE email_verifications (
+     token_hash TEXT PRIMARY KEY,
+     email TEXT NOT NULL,
+     password_hash TEXT NOT NULL,
+     expires_at TEXT NOT NULL
+   );
+   CREATE INDEX email_verifications_email ON email_verifications(email);`,
 ];
 
 // The tables in an order that respects foreign keys (used by import and backup).

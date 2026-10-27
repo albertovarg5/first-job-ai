@@ -52,7 +52,7 @@ section('Database (PostgreSQL)');
 const dbUrl = String(env.DATABASE_URL || '').trim();
 if (isPostgresUrl(dbUrl)) {
   try {
-    const db = await openDatabase(dbUrl);
+    const db = await openDatabase(dbUrl, { migrate: false }); // A check never changes the schema.
     const users = (await db.one('SELECT COUNT(*)::int AS n FROM users')).n;
     const version = (await db.one('SELECT version FROM schema_version')).version;
     ok(`Connected to ${describeTarget(dbUrl)} (schema version ${version}, ${users} account(s))`);

@@ -11,7 +11,8 @@ import { describeTarget, openDatabase } from '../server/db.js';
 if (existsSync('.env')) process.loadEnvFile('.env');
 const target = process.env.DATABASE_URL || 'data/pglite';
 console.log(`Database: ${describeTarget(target)}`);
-const db = await openDatabase(target);
+// migrate: false: a backup never changes the schema (the server applies migrations when it starts).
+const db = await openDatabase(target, { migrate: false });
 try {
   console.log(`Backup written: ${await backupDatabase(db, backupSettings(process.env))}`);
 } finally {

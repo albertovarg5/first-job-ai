@@ -140,12 +140,18 @@ test('password reset email is sent through Resend with the configured sender', a
   );
   await call(api, 'POST', '/auth/signup', { email: 'mail@example.com', password: 'a long pass phrase' });
   const sent = [];
+  // Emails go out after the response; api.settled() waits for them.
+  const forgot = (email) => async () => {
+    const r = await call(api, 'POST', '/auth/forgot', { email });
+    await api.settled();
+    return r;
+  };
   const res = await withFetch(
     async (url, opts) => {
       sent.push({ url: String(url), headers: opts.headers, body: JSON.parse(opts.body) });
       return jsonResponse({ id: 'email_1' });
     },
-    () => call(api, 'POST', '/auth/forgot', { email: 'mail@example.com' }),
+    forgot('mail@example.com'),
   );
   assert.equal(res.status, 200);
   assert.equal(sent.length, 1);
@@ -160,20 +166,20 @@ test('password reset email is sent through Resend with the configured sender', a
   // Unknown emails get the same answer and send nothing.
   const unknown = await withFetch(
     async () => assert.fail('no email for unknown accounts'),
-    () => call(api, 'POST', '/auth/forgot', { email: 'nobody@example.com' }),
+    forgot('nobody@example.com'),
   );
   assert.equal(unknown.body.message, res.body.message);
   assert.match(logs.at(-1), /no account: nothing was sent/);
 
-  // A Resend failure is reported without leaking details to the browser. This
-  // is Resend's answer for onboarding@resend.dev and a recipient other than the account's own email.
+  // A Resend failure only reaches the server log: an error shown only for existing accounts
+  // would tell strangers which emails are registered. This is Resend's answer for
+  // onboarding@resend.dev and a recipient other than the account's own email.
   const failed = await withFetch(
     async () => jsonResponse({ name: 'validation_error', message: 'You can only send testing emails to your own email address (owner@example.com). To send emails to other recipients, please verify a domain.' }, 403),
-    () => call(api, 'POST', '/auth/forgot', { email: 'mail@example.com' }),
+    forgot('mail@example.com'),
   );
-  assert.equal(failed.status, 502);
-  assert.equal(failed.body.code, 'email_failed');
-  assert.ok(!failed.body.error.includes('re_test'));
+  assert.equal(failed.status, 200);
+  assert.equal(failed.body.message, res.body.message);
   assert.match(logs.at(-1), /Resend returned status 403: validation_error: You can only send testing emails to your own email address \(<address>\)/);
   assert.ok(!logs.join('\n').includes('owner@example.com'), "addresses in Resend's message are masked");
   const token = sent[0].body.text.match(/token=([\w-]+)/)[1];
@@ -247,7 +253,7 @@ test('job search through the full API: guests allowed in development, sign-in re
   assert.equal(devRes.body.jobs[0].employer, 'Northwind');
 
   const prodDb = await openDatabase(':memory:');
-  const prod = createApi({ NODE_ENV: 'production', JSEARCH_API_KEY: 'own-key' }, { db: prodDb, log: quietLog });
+  const prod = createApi({ NODE_ENV: 'production', EMAIL_VERIFICATION: 'false', JSEARCH_API_KEY: 'own-key' }, { db: prodDb, log: quietLog });
   let calls = 0;
   const guest = await withFetch(
     async () => {

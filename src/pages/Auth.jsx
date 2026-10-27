@@ -115,8 +115,20 @@ export function SignUp() {
   const [show, setShow] = useState(false);
   const [errors, setErrors] = useState({});
   const [busy, setBusy] = useState(false);
+  const [sent, setSent] = useState('');
 
   if (auth.user) return <Navigate to="/dashboard" replace />;
+
+  if (sent) {
+    return (
+      <AuthShell title="Check your email" footer={<Link to="/signin">Back to sign in</Link>}>
+        <div className="alert alert-success" role="status">
+          <Icon name="check" size={16} /> {sent}
+        </div>
+        <p className="subtle">Open the link on this device and enter the password you just chose. Didn’t get it after a few minutes? Sign up again to get a new link.</p>
+      </AuthShell>
+    );
+  }
 
   const submit = async (e) => {
     e.preventDefault();
@@ -129,7 +141,8 @@ export function SignUp() {
     if (errs.email || errs.password || errs.confirm) return;
     setBusy(true);
     try {
-      await auth.signUp(form.email.trim(), form.password, { importLocal: hasLocal && form.importLocal });
+      const result = await auth.signUp(form.email.trim(), form.password, { importLocal: hasLocal && form.importLocal });
+      if (result?.verify) return setSent(result.message);
       toast.success('Account created. You’re signed in.');
       navigate('/dashboard', { replace: true });
     } catch (err) {
@@ -186,6 +199,74 @@ export function SignUp() {
         </button>
         <p className="subtle">Your data is stored on this app’s server and is only visible when you’re signed in. You can delete your account anytime in Settings.</p>
       </form>
+    </AuthShell>
+  );
+}
+
+// The link from the confirmation email. Asking for the password again means a
+// link someone else requested for this address can't open an account they control.
+export function VerifyEmail() {
+  const auth = useAuth();
+  const toast = useToast();
+  const navigate = useNavigate();
+  const [params] = useSearchParams();
+  const token = params.get('token') || '';
+  const [hasLocal] = useState(() => Boolean(loadData().profile));
+  const [password, setPassword] = useState('');
+  const [importLocal, setImportLocal] = useState(true);
+  const [show, setShow] = useState(false);
+  const [error, setError] = useState(null);
+  const [busy, setBusy] = useState(false);
+
+  if (auth.user) return <Navigate to="/dashboard" replace />;
+
+  const submit = async (e) => {
+    e.preventDefault();
+    if (!password) return setError({ message: 'Enter the password you chose when you signed up.' });
+    setBusy(true);
+    try {
+      await auth.verifyEmail(token, password, { importLocal: hasLocal && importLocal });
+      toast.success('Email confirmed. Your account is ready.');
+      navigate('/dashboard', { replace: true });
+    } catch (err) {
+      setError(err);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <AuthShell title="Finish creating your account" subtitle="Enter the password you chose when you signed up." footer={<Link to="/signin">Back to sign in</Link>}>
+      {!token ? (
+        <div className="alert alert-error">
+          <Icon name="alert" size={16} /> This link is missing its code. Open the link from your email again, or <Link to="/signup">sign up again</Link>.
+        </div>
+      ) : (
+        <form className="form-stack" onSubmit={submit} noValidate>
+          {error && (
+            <div className="alert alert-error" role="alert">
+              <Icon name="alert" size={16} /> {error.message}{' '}
+              {error.code === 'invalid_token' && <Link to="/signup">Sign up again</Link>}
+              {error.code === 'email_taken' && <Link to="/signin">Sign in</Link>}
+            </div>
+          )}
+          <Field label="Password" id="ve-password">
+            <PasswordInput id="ve-password" value={password} show={show} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" />
+          </Field>
+          <label className="checkbox">
+            <input type="checkbox" checked={show} onChange={(e) => setShow(e.target.checked)} /> Show password
+          </label>
+          {hasLocal && (
+            <label className="checkbox import-check">
+              <input type="checkbox" checked={importLocal} onChange={(e) => setImportLocal(e.target.checked)} />
+              Copy the profile, resume and applications saved in this browser into my new account
+            </label>
+          )}
+          <button type="submit" className="btn btn-primary btn-lg btn-block" disabled={busy}>
+            {busy && <Spinner />} Create my account
+          </button>
+        </form>
+      )}
     </AuthShell>
   );
 }

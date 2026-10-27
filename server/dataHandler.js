@@ -9,7 +9,7 @@
 //          409 { code: 'conflict', revision } if another device saved first.
 
 import { normalizeData } from '../src/lib/storage.js';
-import { HttpError, pathOf, readJson, send } from './http.js';
+import { HttpError, createLimits, pathOf, rateLimited, readJson, send } from './http.js';
 
 export const MAX_DATA_BYTES = 5 * 1024 * 1024;
 
@@ -35,6 +35,8 @@ export function createDataHandler({ db, requireUser }) {
   // ON CONFLICT DO NOTHING: if another request created the row first, nothing is inserted (a conflict).
   const insert = (...p) => db.run('INSERT INTO user_data (user_id, data, revision, updated_at) VALUES ($1, $2, 1, $3) ON CONFLICT DO NOTHING', p);
   const update = (...p) => db.run('UPDATE user_data SET data = $1, revision = revision + 1, updated_at = $2 WHERE user_id = $3 AND revision = $4', p);
+  // The app saves a moment after each edit; this only stops scripted floods of up-to-5 MB writes.
+  const limits = createLimits(db);
 
   return async function dataHandler(req, res, next) {
     const path = pathOf(req);
@@ -46,6 +48,8 @@ export function createDataHandler({ db, requireUser }) {
         return send(res, 200, row ? { data: JSON.parse(row.data), revision: row.revision, updatedAt: row.updated_at } : { data: null, revision: 0, updatedAt: null });
       }
       if (req.method === 'PUT') {
+        const r = await limits.take(`save:${user.id}`, { limit: 300, windowMs: 10 * 60 * 1000 });
+        if (!r.ok) return rateLimited(res, r.retryAfter, 'Too many saves in a short time. Please wait a minute; your next change will be saved.');
         const body = await readJson(req, MAX_DATA_BYTES);
         const baseRevision = Number(body.baseRevision);
         if (!Number.isInteger(baseRevision) || baseRevision < 0) throw new HttpError(400, 'Missing baseRevision.', 'invalid_input');

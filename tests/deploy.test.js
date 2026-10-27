@@ -59,7 +59,7 @@ test('production startup lists every missing variable by name and never prints s
 
 test('links the server builds (reset email, http→https) ignore spoofed Host and X-Forwarded-Host', async () => {
   const site = 'https://first-job-ai-steel.vercel.app';
-  const env = { NODE_ENV: 'production', APP_URL: site, RESEND_API_KEY: 're_test', EMAIL_FROM: 'First Job AI <no-reply@example.com>' };
+  const env = { NODE_ENV: 'production', EMAIL_VERIFICATION: 'false', APP_URL: site, RESEND_API_KEY: 're_test', EMAIL_FROM: 'First Job AI <no-reply@example.com>' };
   const db = await openDatabase(':memory:');
   const api = createApi(env, { db, log: { info() {}, warn() {}, error() {} } });
   const spoofed = { host: 'evil.example', 'x-forwarded-host': 'evil.example', 'x-forwarded-proto': 'https', origin: site };
@@ -67,7 +67,11 @@ test('links the server builds (reset email, http→https) ignore spoofed Host an
   const sent = [];
   const res = await withFetch(
     async (url, opts) => (sent.push(JSON.parse(opts.body)), jsonResponse({ id: 'email_1' })),
-    () => call(api, 'POST', '/auth/forgot', { email: 'owner@example.com' }, { headers: spoofed }),
+    async () => {
+      const r = await call(api, 'POST', '/auth/forgot', { email: 'owner@example.com' }, { headers: spoofed });
+      await api.settled();
+      return r;
+    },
   );
   assert.equal(res.status, 200);
   assert.match(sent[0].text, /\nhttps:\/\/first-job-ai-steel\.vercel\.app\/reset-password\?token=[\w-]+\n/);

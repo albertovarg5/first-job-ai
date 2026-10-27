@@ -94,6 +94,10 @@ Every API is **optional**: the app starts without any keys and each feature expl
 | `AI_MODEL` | Optional | Defaults to `claude-sonnet-5-5`. Set `claude-opus-5-5` for the most capable model (higher cost per request). |
 | `AI_FREE_MONTHLY_LIMIT` | Optional | AI requests per signed-in user per month on the Free plan (default 20). Failed requests don't count. |
 | `AI_PREMIUM_MONTHLY_LIMIT` | Optional | Same for the Premium plan (default 200). |
+| `AI_NEW_ACCOUNT_DAILY_TOTAL` | Optional | AI requests that Free accounts younger than 7 days share per UTC day (default 300, `0` = no cap). Throwaway accounts can only use this pool, never established users' requests. |
+| `AI_FREE_DAILY_TOTAL` | Optional | AI requests all Free accounts together may make per UTC day (default 3000, `0` = no cap): a last backstop for the AI bill. Premium is never affected. |
+| `EMAIL_VERIFICATION` | Optional | New accounts confirm their email before they exist (default: on in production, off in development, where the link is printed in the terminal). Needs `RESEND_API_KEY`, `EMAIL_FROM` and `APP_URL` in production. |
+| `DEBUG_PROXY_HEADERS` | Optional | `true` logs the forwarding headers of the next 20 API requests, to check client-IP detection (docs/DEPLOY.md, step 5a). Turn it off afterwards. |
 | `DATABASE_URL` | Production | PostgreSQL address (`postgresql://…`). Blank = a local development database in `data/pglite`. Required on a server. |
 | `APP_URL` | Production | Public URL of the site (the Vercel address), e.g. `https://firstjob.example.com`. Used for Stripe/reset links and to accept requests forwarded by Vercel. |
 | `RESEND_API_KEY`, `EMAIL_FROM` | Password reset emails | From <https://resend.com>, with a verified sender domain. |
@@ -306,9 +310,13 @@ Backups: use the Postgres service's backups on Railway, and `npm run backup` wit
 ## Security notes
 
 - API keys live only on the server and are never sent to the browser.
-- Passwords are hashed with scrypt and a random salt; sessions are random tokens stored hashed in the database, sent as `HttpOnly`, `SameSite=Lax` (and `Secure` in production) cookies.
+- Passwords are hashed with scrypt and a random salt; sessions are random tokens stored hashed in the database, sent as `HttpOnly`, `SameSite=Lax` (and `Secure` in production) cookies. A session ends after 7 days without use and after 30 days at most; signing in again, changing the password and resetting it end the right sessions on the server.
+- New accounts confirm their email first (single-use link, 24 hours, and the chosen password must be entered again). Sign-up, sign-in and password reset answer the same way whether or not an email is registered.
+- Wrong passwords are counted per account. A browser that signed in before keeps its own count, so a stranger can't lock the owner out; a password reset unlocks the account immediately.
+- Rate limits are stored in PostgreSQL (shared by every server instance and kept across restarts).
 - Every data request uses the user id from the session, so users can only read and write their own data.
-- Each signed-in user has a monthly AI allowance (`AI_FREE_MONTHLY_LIMIT`), so one account can't run up your Anthropic bill.
+- Each signed-in user has a monthly AI allowance (`AI_FREE_MONTHLY_LIMIT`), so one account can't run up your Anthropic bill. New Free accounts share a separate daily pool, so many new accounts can't use up AI for established users.
+- In production, setup problems (API keys, models, credit) are only written to the server log; visitors see a plain "temporarily unavailable" message.
 - Billing:
   - No card data is stored: only Stripe customer and subscription IDs, the price, status and dates.
   - Checkout, portal and sync require sign-in and are rate limited.

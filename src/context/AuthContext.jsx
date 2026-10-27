@@ -4,6 +4,14 @@ import { loadData } from '../lib/storage.js';
 
 const AuthContext = createContext(null);
 
+async function copyLocalData() {
+  try {
+    await apiFetch('/api/data', { method: 'PUT', body: { data: loadData(), baseRevision: 0 } });
+  } catch {
+    /* The account still works; the user can copy data later from Settings. */
+  }
+}
+
 // Who is signed in. Without an account the app runs in guest mode and keeps
 // data in this browser only (the original behaviour).
 export function AuthProvider({ children }) {
@@ -41,16 +49,19 @@ export function AuthProvider({ children }) {
         signedIn(res.user);
         return res.user;
       },
-      // importLocal copies this browser's guest data into the new account.
+      // importLocal copies this browser's guest data into the new account. When the
+      // server asks to confirm the email first, returns { verify: true, message } instead.
       async signUp(email, password, { importLocal = false } = {}) {
         const res = await apiFetch('/api/auth/signup', { method: 'POST', body: { email, password } });
-        if (importLocal) {
-          try {
-            await apiFetch('/api/data', { method: 'PUT', body: { data: loadData(), baseRevision: 0 } });
-          } catch {
-            /* The account still works; the user can copy data later from Settings. */
-          }
-        }
+        if (res.verify) return res;
+        if (importLocal) await copyLocalData();
+        signedIn(res.user);
+        return res.user;
+      },
+      // Opens the link from the confirmation email: creates the account and signs in.
+      async verifyEmail(token, password, { importLocal = false } = {}) {
+        const res = await apiFetch('/api/auth/verify', { method: 'POST', body: { token, password } });
+        if (importLocal) await copyLocalData();
         signedIn(res.user);
         return res.user;
       },

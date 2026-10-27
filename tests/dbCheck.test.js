@@ -31,7 +31,7 @@ test('db:check finds an account inside a READ ONLY transaction and prints no sec
   const missing = (await inspectAccounts(db, 'nobody@example.com')).join('\n');
   await db.exec('ROLLBACK');
 
-  assert.match(found, /Schema version: 1 of 1 \(all migrations applied\)/);
+  assert.match(found, /Schema version: (\d+) of \1 \(all migrations applied\)/);
   assert.match(found, /Accounts: 1/);
   assert.match(found, /Account for the given email: FOUND/);
   assert.match(found, /Signed-in sessions: 1/);
