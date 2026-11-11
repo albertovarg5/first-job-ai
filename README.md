@@ -11,6 +11,24 @@ It searches real job listings, turns everyday experience (class projects, volunt
 
 ---
 
+## Sprint 1 MVP
+
+**Live app:** _Vercel URL: add yours here_ · **Backend health check:** <https://first-job-ai-production.up.railway.app/healthz> (answers `ok`)
+
+**Stack:** React 19 + Vite (frontend, Vercel) · Node.js 22+ server (Railway) · PostgreSQL (PGlite locally) · JSearch (jobs) · Anthropic (optional AI). Stripe billing exists in the code but is **off** for Sprint 1.
+
+**Sprint 1 core features:** accounts (sign up / sign in), real job search, job tracker, resume builder with PDF, guest mode.
+
+**Architecture and design pattern:** see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). Short version: a React frontend talks to a Node API; database access lives in store modules (**Repository pattern**, e.g. `server/billingStore.js`) and handlers are built with factory functions that receive their dependencies (`createDataHandler({ db, requireUser })`), so tests can inject a fake database or fake `fetch`.
+
+**Tests:** `npm test` runs the full suite (Node's built-in runner). Tests cover success and failure paths (bad passwords, invalid input, rate limits, API-key errors, timeouts, data isolation between users) and never call real external APIs. On Windows, run it from a path whose drive letter is uppercase (`C:\...`); from `c:\...` the browser-UI tests fail with a duplicate-React error.
+
+**Screenshots:** _add 2-3 screenshots (dashboard, job search, resume) to `docs/screenshots/` and link them here._
+
+**Future sprints:** Sprint 2: polish the Tracker/Application workspace, AI features on a free tier. Sprint 3: email verification, legal pages and privacy review. Later: paid Premium via Stripe (currently disabled).
+
+---
+
 ## Features
 
 | Area | What you can do |
@@ -160,6 +178,7 @@ Premium is a recurring Stripe subscription. Payment, card changes and cancellati
   - When the subscription is canceled, unpaid or expired, the account goes back to Free.
   - A **full refund of the latest payment**, or a **dispute (chargeback)**, cancels the subscription immediately in Stripe and the account goes back to Free, so the customer isn't charged again. Partial refunds and refunds of older months change nothing.
   - If a webhook is ever missed, Premium still ends 3 days after the paid period.
+- **Free launch (current):** selling Premium is off unless `BILLING_ENABLED=true` is set on the server **and** `BILLING_UI` is `true` in `src/lib/billing.js` (which shows Plans & Pricing again). While off, no checkout, portal or withdrawal can start, whatever Stripe keys are set; webhooks and cancel-on-account-deletion keep working for subscriptions that already exist.
 - **Live-mode safety lock:** a live key (`sk_live_…`) takes no payments until `STRIPE_ALLOW_LIVE=true` is also set. Test keys need no unlock.
 - Deleting an account cancels its subscription first. If Stripe can't be reached, the account is kept so nobody is billed for a deleted account.
 
@@ -247,7 +266,7 @@ To switch real payments off again at any time, remove `STRIPE_ALLOW_LIVE` (or se
 npm test
 ```
 
-128 tests (run against PostgreSQL via PGlite) cover: moving the SQLite data into PostgreSQL, backup and restore, Stripe checkout, webhooks, cancellation and refunds, job search for both providers (OpenWeb Ninja `search-v2` with cursor paging and RapidAPI; provider detection, validation, success, caching, empty results, duplicate listings, missing fields, invalid/unsubscribed key, rate limit, upstream errors, network failure, timeout, monthly limit), settings validation (`VITE_` secrets, half-configured email, bad limits), Anthropic error handling (bad key, unknown model, rate limit, overloaded, no credit, refusal, cut-off answer), Resend email sending, saved jobs and tracker entries persisting per user in the database across sign-out, sign-in and restart, job search sign-in rules, saved-job dedupe, tracker duplicates and status history, accounts (hashing, sessions, sign-in errors, rate limiting, reset tokens, change password, delete account), **per-user data isolation**, CSRF blocking, save conflicts, data validation, migrations, honesty checks for cover letters/summaries/skills, job recommendations, AI route validation, plus the original translator, resume, PDF, missions and interview tests.
+196 tests (run against PostgreSQL via PGlite) cover: moving the SQLite data into PostgreSQL, backup and restore, Stripe checkout, webhooks, cancellation and refunds, job search for both providers (OpenWeb Ninja `search-v2` with cursor paging and RapidAPI; provider detection, validation, success, caching, empty results, duplicate listings, missing fields, invalid/unsubscribed key, rate limit, upstream errors, network failure, timeout, monthly limit), settings validation (`VITE_` secrets, half-configured email, bad limits), Anthropic error handling (bad key, unknown model, rate limit, overloaded, no credit, refusal, cut-off answer), Resend email sending, saved jobs and tracker entries persisting per user in the database across sign-out, sign-in and restart, job search sign-in rules, saved-job dedupe, tracker duplicates and status history, accounts (hashing, sessions, sign-in errors, rate limiting, reset tokens, change password, delete account), **per-user data isolation**, CSRF blocking, save conflicts, data validation, migrations, honesty checks for cover letters/summaries/skills, job recommendations, AI route validation, plus the original translator, resume, PDF, missions and interview tests.
 
 The tests never call the real JSearch or Anthropic APIs; those calls are simulated.
 
