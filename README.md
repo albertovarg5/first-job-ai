@@ -13,7 +13,7 @@ It searches real job listings, turns everyday experience (class projects, volunt
 
 ## Sprint 1 MVP
 
-**Live app:** _Vercel URL: add yours here_ · **Backend health check:** <https://first-job-ai-production.up.railway.app/healthz> (answers `ok`)
+**Live app:** <https://first-job-ai-steel.vercel.app> · **Backend health check:** <https://first-job-ai-production.up.railway.app/healthz> (answers `ok`)
 
 **Stack:** React 19 + Vite (frontend, Vercel) · Node.js 22+ server (Railway) · PostgreSQL (PGlite locally) · JSearch (jobs) · Anthropic (optional AI). Stripe billing exists in the code but is **off** for Sprint 1.
 
@@ -23,9 +23,23 @@ It searches real job listings, turns everyday experience (class projects, volunt
 
 **Tests:** `npm test` runs the full suite (Node's built-in runner). Tests cover success and failure paths (bad passwords, invalid input, rate limits, API-key errors, timeouts, data isolation between users) and never call real external APIs. On Windows, run it from a path whose drive letter is uppercase (`C:\...`); from `c:\...` the browser-UI tests fail with a duplicate-React error.
 
-**Screenshots:** _add 2-3 screenshots (dashboard, job search, resume) to `docs/screenshots/` and link them here._
-
 **Future sprints:** Sprint 2: polish the Tracker/Application workspace, AI features on a free tier. Sprint 3: email verification, legal pages and privacy review. Later: paid Premium via Stripe (currently disabled).
+
+### Screenshots
+
+**Dashboard**
+
+![Dashboard](docs/screenshots/homepage.png)
+
+**Job search**
+
+![Job search](docs/screenshots/job-search.png)
+
+**Resume builder**
+
+![Resume builder](docs/screenshots/resume-builder.png)
+
+
 
 ---
 
