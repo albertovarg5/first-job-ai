@@ -1,0 +1,22 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [stripe-billing]
+  push:
+    branches: [stripe-billing]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      # Tests use an in-memory database and fake API calls: no secrets needed.
+      - run: npm test
+      - run: npm run build

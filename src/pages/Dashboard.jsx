@@ -36,7 +36,6 @@ export default function Dashboard() {
   const submitted = applications.filter(isSubmitted).length;
   const active = applications.filter((a) => !['rejected', 'offer'].includes(a.status)).length;
   const interviews = upcomingInterviews(applications);
-  const completedSessions = interviewSessions.filter((s) => s.completedAt).length;
   const answered = interviewSessions.reduce((n, s) => n + s.items.filter((i) => i.answer?.trim()).length, 0);
 
   const todayKey = toDateKey();
