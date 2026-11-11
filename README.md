@@ -21,7 +21,24 @@ It searches real job listings, turns everyday experience (class projects, volunt
 
 **Architecture and design pattern:** see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). Short version: a React frontend talks to a Node API; database access lives in store modules (**Repository pattern**, e.g. `server/billingStore.js`) and handlers are built with factory functions that receive their dependencies (`createDataHandler({ db, requireUser })`), so tests can inject a fake database or fake `fetch`.
 
-**Tests:** `npm test` runs the full suite (Node's built-in runner). Tests cover success and failure paths (bad passwords, invalid input, rate limits, API-key errors, timeouts, data isolation between users) and never call real external APIs. On Windows, run it from a path whose drive letter is uppercase (`C:\...`); from `c:\...` the browser-UI tests fail with a duplicate-React error.
+**Frontend (React single-page app):** React Router in [src/App.jsx](src/App.jsx) defines the routes (`/`, `/signin`, `/dashboard`, `/jobs`, `/tracker`, `/resume`, `/settings`, ...) and a `*` route that shows the 404 page. Shared state lives in React Context providers (`AuthContext`, `AppDataContext`, `ToastContext` in [src/context](src/context)), read with `useAuth()`, `useAppData()` and `useToast()`; page-local state uses `useState`. Reusable components that take props are in [src/components](src/components) (`ui.jsx`: `EmptyState`, `Field`, `Spinner`, `Segmented`, ...). Pages call the backend through `apiFetch` in [src/lib/api.js](src/lib/api.js) and show loading and error states (for example Job Search). Vercel serves the SPA and rewrites unknown paths to `index.html` ([vercel.json](vercel.json)).
+
+**Responsive CSS:** the app shell and navigation ([src/styles/global.css](src/styles/global.css)) and the Dashboard, Job Search, Job Tracker and Resume Builder styles ([src/styles/pages.css](src/styles/pages.css)) are **mobile-first**: base rules are the phone layout and `min-width` media queries add the tablet/desktop layout. Breakpoints: 641px, 721px, 821px, 861px, 961px and 1101px. The other pages (landing, interview practice, translator, settings, pricing, ...) are still written desktop-first with `max-width` queries; they work on phones but have not been converted. We compared the four key screens before and after the conversion at 14 widths from 320px to 1400px and the rendering was identical, with no horizontal scrolling.
+
+**MVP requirements and where they are met:**
+
+| Requirement | Where |
+| --- | --- |
+| 4+ routes and a 404 | `src/App.jsx` (about 20 routes, `path="*"` -> `NotFound`) |
+| Reusable components with props | `src/components/ui.jsx`, `jobs/`, `resume/` |
+| Local state (`useState`) | most pages and components |
+| Context Provider + `useContext` | `src/context/*` |
+| External API fetching with loading/error states | `src/lib/api.js`, Job Search, Pricing |
+| Responsive, mobile-first CSS | key screens, see above |
+| Component tests | `tests/ui/` (React Testing Library + Vitest) |
+| Deployment | Vercel (frontend) + Railway (backend), see [docs/DEPLOY.md](docs/DEPLOY.md) |
+
+**Tests:** `npm test` runs two suites one after the other: (1) Node's built-in test runner for the server and logic tests (`tests/*.test.js`, plus a few older UI tests that render pages in jsdom), then (2) Vitest + React Testing Library for the component tests in `tests/ui/*.spec.jsx` (reusable components and props, local state, the 404 page, and Job Search loading, success and error states). `npm run lint` runs ESLint and `npm run build` makes the production build; GitHub Actions runs lint, tests and build on every pull request to `stripe-billing`. Tests cover success and failure paths (bad passwords, invalid input, rate limits, API-key errors, timeouts, data isolation between users) and never call real external APIs. Responsive layout is checked by hand in a browser, not by automated tests. On Windows, run the tests from a path whose drive letter is uppercase (`C:\...`); from `c:\...` the older jsdom tests fail with a duplicate-React error.
 
 **Future sprints:** Sprint 2: polish the Tracker/Application workspace, AI features on a free tier. Sprint 3: email verification, legal pages and privacy review. Later: paid Premium via Stripe (currently disabled).
 
