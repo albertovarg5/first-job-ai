@@ -68,7 +68,7 @@ test('text wrapping respects the width', () => {
 function pdfPages(bytes) {
   const raw = new TextDecoder('latin1').decode(bytes);
   return [...raw.matchAll(/stream\n([\s\S]*?)\nendstream/g)].map(([, s]) =>
-    [...s.matchAll(/\/(F\d) ([\d.]+) Tf .*? Td \(((?:\.|[^\)])*)\) Tj/g)].map(([, font, size, text]) => ({ font, size: Number(size), text })),
+    [...s.matchAll(/\/(F\d) ([\d.]+) Tf .*? Td \(((?:\.|[^)])*)\) Tj/g)].map(([, font, size, text]) => ({ font, size: Number(size), text })),
   );
 }
 const allText = (bytes) => pdfPages(bytes).flat().map((t) => t.text).join('\n');
